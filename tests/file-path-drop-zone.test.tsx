@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { parseHTML } from "linkedom";
-import { FilePathDropZone } from "../components/file-path-drop-zone.tsx";
+import { FilePathDropZone, dropLabel, useImageDropTarget } from "../components/file-path-drop-zone.tsx";
 import { useDictationTarget } from "../components/dictation.tsx";
 import { PathInput } from "../components/path-input.tsx";
 import { readPathInput, restorePathSelection } from "../components/path-input-dom.ts";
@@ -14,10 +14,12 @@ afterEach(async () => { await cleanup?.(); cleanup = undefined; });
 
 /** No native DataTransfer/Selection in linkedom. These shims exercise React's
  * real bubbling handlers and the editor's logical caret contract, not OS drag. */
-async function fixture({ desktop = true, claimed = true, onContentRoot }: {
+async function fixture({ desktop = true, claimed = true, onContentRoot, imageTarget }: {
 	desktop?: boolean;
 	claimed?: boolean;
 	onContentRoot?: (element: HTMLElement | null) => void;
+	/** An open chat's composer claiming in-chat image drops. */
+	imageTarget?: (files: File[]) => void;
 } = {}) {
 	const { window: win, document: doc } = parseHTML("<html><body><div id='root'></div></body></html>");
 	let active: Element = doc.body;
@@ -59,6 +61,7 @@ async function fixture({ desktop = true, claimed = true, onContentRoot }: {
 	const root = createRoot(doc.getElementById("root")!);
 	function Harness() {
 		useDictationTarget((text) => appends.push(text), claimed);
+		useImageDropTarget(imageTarget);
 		return <>
 			<aside data-testid="sidebar">Sidebar</aside>
 			<FilePathDropZone onContentRoot={onContentRoot}>
@@ -103,8 +106,13 @@ async function fixture({ desktop = true, claimed = true, onContentRoot }: {
 		await act(async () => { target.dispatchEvent(event); });
 		return event;
 	}
+	function imageFile(name: string, path?: string, type = "image/png") {
+		const result = new File(["image bytes are read by the composer, not the drop zone"], name, { type });
+		if (path !== undefined) backingPaths.set(result, path);
+		return result;
+	}
 	return {
-		doc, editor, appends, resolved, file, transfer, event,
+		doc, editor, appends, resolved, file, imageFile, transfer, event,
 		get value() { return value; },
 		get status() { return doc.querySelector('[role="status"]')?.textContent ?? ""; },
 		focusEditor(offset: number) {
@@ -269,4 +277,43 @@ test("production AppShell places the sidebar outside its content-only drop zone"
 	const shell = source.slice(source.indexOf("export function AppShell("));
 	assert.match(shell, /<SessionsSidebar\s*\/>\s*<FilePathDropZone\b[^>]*>\{children\}<\/FilePathDropZone>/);
 	assert.doesNotMatch(shell, /<FilePathDropZone\b[^>]*>[\s\S]*<SessionsSidebar/);
+});
+
+test("in an open chat, dropped image files go inline and other files stay path chips", async () => {
+	const inline: File[][] = [];
+	const f = await fixture({ imageTarget: (files) => inline.push(files) });
+	f.focusEditor(4);
+	const shot = f.imageFile("shot.png", "/pics/shot.png");
+	const bmp = f.imageFile("old.bmp", "/pics/old.bmp", "image/bmp");
+	const notes = f.file("notes.pdf", "/course/notes.pdf");
+	await f.event("drop", f.transfer([shot, notes, bmp]));
+	assert.deepEqual(inline, [[shot, bmp]], "every image file goes to the composer, which admits or rejects it");
+	assert.equal(f.value, `read ${quoteFilePath("/course/notes.pdf")} this`, "only the non-image file becomes a chip");
+	assert.deepEqual(f.resolved, [notes], "image files are never resolved to paths");
+});
+
+test("in an open chat in the browser, an images-only drop needs no desktop bridge", async () => {
+	const inline: File[][] = [];
+	const f = await fixture({ desktop: false, imageTarget: (files) => inline.push(files) });
+	const shot = f.imageFile("shot.png");
+	await f.event("dragenter", f.transfer([shot]));
+	assert.match(f.doc.querySelector('[data-testid="file-path-drop-indicator"]')!.textContent!, /Drop to attach images/);
+	await f.event("drop", f.transfer([shot]));
+	assert.deepEqual(inline, [[shot]]);
+	assert.equal(f.status, "", "no desktop-only notice for images");
+	assert.equal(f.value, "readthis");
+});
+
+test("without an open chat, dropped images keep today's path behavior", async () => {
+	const f = await fixture();
+	f.focusEditor(4);
+	await f.event("drop", f.transfer([f.imageFile("shot.png", "/pics/shot.png")]));
+	assert.equal(f.value, `read ${quoteFilePath("/pics/shot.png")} this`);
+});
+
+test("drop indicator copy", () => {
+	assert.equal(dropLabel(true, true), "Drop to attach images or file paths");
+	assert.equal(dropLabel(false, true), "Drop to attach images");
+	assert.equal(dropLabel(true, false), "Drop to attach file paths");
+	assert.match(dropLabel(false, false), /desktop app/);
 });

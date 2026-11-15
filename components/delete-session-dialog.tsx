@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { HostDialog } from "@/components/host-dialog";
+import { forgetChatDrafts } from "@/components/draft-store";
 import type { ChatDeleteMode, ChatListItem } from "@/src/core";
 
 /** The graph-traces checkbox copy (owner, 2026-09-24 flow rework — was
@@ -86,6 +87,8 @@ export function DeleteSessionDialog({
 				setBusy(false);
 				return;
 			}
+			// A deleted chat leaves no locally saved draft behind.
+			forgetChatDrafts(chat.id);
 			onDeleted(chat.id, mode, body.graphRevision ?? 0);
 		} catch {
 			setFailure({ code: "network", error: "Delete failed — network error. Try again." });

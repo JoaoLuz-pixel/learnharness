@@ -49,3 +49,17 @@ describe("visibleQueuedSteers (the fold: a line dies when its card lands)", () =
 		assert.deepEqual(after.map((s) => s.id), ["steer_b"], "the drained steer's line dropped");
 	});
 });
+
+describe("QueuedSteersBody with images (owner: text + tiny thumbnails)", () => {
+	it("renders the text followed by one tiny thumbnail per image", () => {
+		const html = renderToStaticMarkup(<QueuedSteersBody steers={[{ id: "s", text: "look at this", images: [{ data: "AAAA", mimeType: "image/png" }, { data: "BBBB", mimeType: "image/jpeg" }] }]} />);
+		assert.match(html, /look at this/);
+		assert.equal(html.match(/data-testid="queued-steer-image"/g)?.length, 2);
+		assert.ok(html.indexOf("look at this") < html.indexOf("queued-steer-image"), "thumbnails follow the text");
+	});
+	it("an image-only steer shows just its thumbnails", () => {
+		const html = renderToStaticMarkup(<QueuedSteersBody steers={[{ id: "s", text: "", images: [{ data: "AAAA", mimeType: "image/png" }] }]} />);
+		assert.equal(html.match(/data-testid="queued-steer-image"/g)?.length, 1);
+		assert.doesNotMatch(html, /title=""/);
+	});
+});

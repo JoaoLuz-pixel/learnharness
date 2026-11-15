@@ -14,6 +14,8 @@
 export interface QueuedSteerLine {
 	id: string;
 	text: string;
+	/** Images riding the steer: tiny thumbnails after the text (owner). */
+	images?: readonly { data: string; mimeType: string }[];
 }
 
 /** The pure body (SSR-pinnable): one right-aligned truncated line per
@@ -22,7 +24,17 @@ export function QueuedSteersBody({ steers }: { steers: QueuedSteerLine[] }) {
 	if (steers.length === 0) return null;
 	return (
 		<div className="flex flex-col items-end gap-0.5 pb-1 pr-4" data-testid="queued-steers">
-			{steers.map((s) => (
+			{steers.map((s) => s.images?.length ? (
+				<span key={s.id} className="flex max-w-[240px] items-center gap-1 font-ui text-[11px] text-muted-foreground/60">
+					{s.text && <span title={s.text} className="block min-w-0 truncate">{s.text}</span>}
+					{s.images.map((image, index) => (
+						// Local steer bytes, tiny and quiet like the line itself.
+						// eslint-disable-next-line @next/next/no-img-element
+						<img key={index} src={`data:${image.mimeType};base64,${image.data}`} alt="" aria-hidden draggable={false}
+							data-testid="queued-steer-image" className="size-3.5 shrink-0 rounded-[2px] object-cover opacity-80" />
+					))}
+				</span>
+			) : (
 				<span
 					key={s.id}
 					title={s.text}

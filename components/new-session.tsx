@@ -16,7 +16,10 @@ import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
-import { SessionStarter } from "@/components/start-session";
+import { SessionStarter, sessionTitleFor } from "@/components/start-session";
+import { useStagedImages, type StagedImages } from "@/components/staged-images";
+import { discardDraft, loadDraft, scheduleDraftSave, startDraftKey } from "@/components/draft-store";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
@@ -50,19 +53,24 @@ export async function startDraftSession(
 	picks?: readonly DraftPick[],
 	starter = new SessionStarter(),
 	settingsIdentity?: string,
+	images: readonly ImageContent[] = [],
 ): Promise<string | null> {
 	const t = text.trim();
-	if (!t) return null;
+	if (!t && images.length === 0) return null;
+	// Image-only openings are titled "New session" (owner); the opening
+	// message itself then carries no text, only its images.
+	const title = sessionTitleFor(t);
 	// THE PICKS RIDE THE CREATE (owner round 10): a practice draft seeded
 	// from the pick bar creates its session WITH the graph context — the
 	// same contract as the home screen's practice send (the marker with
 	// [id] name: statement lines, target validation's truth set).
 	return starter.start(
 		mode === "practice"
-			? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
-			: { title: t },
+			? { title, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
+			: { title },
 		fetchLike,
 		settingsIdentity,
+		images.length ? { text: t, images } : undefined,
 	);
 }
 
@@ -83,6 +91,7 @@ export function DraftShell({
 	onOpenPicker,
 	onClearPicks,
 	overlay,
+	images,
 }: {
 	busy: boolean;
 	text: string;
@@ -110,6 +119,8 @@ export function DraftShell({
 	 *  the graph view (the overlay fills its column, never the sidebar).
 	 *  Passed as a node so the pick state stays in NewSession. */
 	overlay?: ReactNode;
+	/** Staged pasted images (paste only here; drops stay path-based). */
+	images?: StagedImages;
 }) {
 	const controller = useOptionalInteractionLayers();
 	const pathname = usePathname();
@@ -132,7 +143,7 @@ export function DraftShell({
 	// round, owner 2026-10-01): the spoken text is deferred in the run's
 	// buffer — Enter must reach the finish-first send, not be gated out by
 	// an empty textarea. Nothing said → the send no-ops.
-	const canSend = text.trim().length > 0 || dictation.active;
+	const canSend = text.trim().length > 0 || dictation.active || (images?.images.length ?? 0) > 0;
 	/* FINISH DICTATION FIRST (owner, 2026-10-01): stop the run, let the
 	 * last finals land through onChange, THEN call the parent's send —
 	 * which reads its REF mirror, so the post-await timing of React's
@@ -213,6 +224,7 @@ export function DraftShell({
 										// started yet, so the composer must not read like one is in
 										// flight.
 										placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+										images={images}
 									/>
 								</div>
 								<StatsBar
@@ -247,10 +259,24 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	 * landed via setState and may not have re-rendered yet. The send reads
 	 * the mirror; every write keeps it current. */
 	const textRef = useRef("");
+	// The unsent draft (text + pasted images) survives a reload (owner).
+	const draftKey = startDraftKey("new", mode);
+	const stagedImages = useStagedImages((images) => scheduleDraftSave(draftKey, { text: textRef.current, images }));
 	const applyText = (v: string) => {
 		textRef.current = v;
 		setText(v);
+		scheduleDraftSave(draftKey, { text: v, images: stagedImages.imagesRef.current });
 	};
+	const { imagesRef: stagedImagesRef, setImages: setStagedImages } = stagedImages;
+	useEffect(() => {
+		let live = true;
+		void loadDraft(draftKey).then((draft) => {
+			if (!live || !draft) return;
+			if (!textRef.current && draft.text) { textRef.current = draft.text; setText(draft.text); }
+			if (!stagedImagesRef.current.length && draft.images.length) setStagedImages(draft.images, false);
+		});
+		return () => { live = false; };
+	}, [draftKey, stagedImagesRef, setStagedImages]);
 	const [busy, setBusy] = useState(false);
 	const startingRef = useRef(false);
 	const starterRef = useRef(new SessionStarter());
@@ -292,7 +318,8 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 
 	const send = useCallback(() => {
 		const draft = textRef.current.trim();
-		if (!draft || startingRef.current) return;
+		const images = stagedImagesRef.current.map(image => ({ ...image }));
+		if ((!draft && images.length === 0) || startingRef.current) return;
 		if (!configured) {
 			setSetupOpen(true);
 			return;
@@ -316,9 +343,10 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		setBusy(true);
 		setStartError(false);
 		void startDraftSession(draft, fetch, mode === "practice" ? "practice" : undefined, mode === "practice" ? picksRef.current : undefined,
-			starterRef.current, JSON.stringify(catalog?.slots.strong))
+			starterRef.current, JSON.stringify(catalog?.slots.strong), images)
 			.then((target) => {
-				if (target) router.push(target);
+				// The handover owns the message now; the start draft is done.
+				if (target) { void discardDraft(draftKey); router.push(target); }
 				else { startingRef.current = false; setBusy(false); }
 			})
 			.catch(() => {
@@ -326,7 +354,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				setBusy(false);
 				setStartError(true);
 			});
-	}, [router, configured, zeroKeys, catalog, mode]);
+	}, [router, configured, zeroKeys, catalog, mode, draftKey, stagedImagesRef]);
 
 	return (
 		<>
@@ -337,6 +365,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				onChange={applyText}
 				onSend={send}
 				mode={mode}
+				images={stagedImages}
 				picks={picks}
 				onOpenPicker={openPicker}
 				onClearPicks={() => applyPicks([])}

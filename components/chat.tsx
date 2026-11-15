@@ -7,6 +7,9 @@ import { usePlugins } from "./plugins";
 import { PluginSubmissionRunner, SubmissionModelEpoch, type SubmissionAttempt } from "./plugin-submission-runner";
 import { submissionImages, type BuiltinSubmissionCapture, type PrepareBuiltinSubmission, type PrepareThinkingSubmission, type PreparePluginQuestionSubmission, type PreparePluginProblemSubmission } from "./plugin-submission-adapters";
 import { SubmittedImages } from "./submitted-images";
+import { useStagedImages } from "./staged-images";
+import { chatDraftKey, clearOpeningImages, loadDraft, readOpeningImages, scheduleDraftSave, stashOpeningImages } from "./draft-store";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { usePageSurfaceBoundary, SurfaceRegion } from "./plugin-surfaces";
 import { findSurfaceBoundary } from "./plugin-surface-targets";
 import { scheduleOpeningSubmission } from "./plugin-submission-opening";
@@ -680,13 +683,33 @@ export function Chat({
 	 * resets still bump a revision so the local field can sync. */
 	const textRef = useRef("");
 	const composerEditRevision = useRef(0);
+	/* Staged composer images (paste + in-chat drop). The unsent draft —
+	 * text AND images — is saved locally so a reload restores it; nothing
+	 * reaches the model until it is sent. */
+	const stagedImages = useStagedImages((images) => scheduleDraftSave(chatDraftKey(chatId), { text: textRef.current, images }));
+	const saveComposerDraft = useCallback(() => {
+		scheduleDraftSave(chatDraftKey(chatId), { text: textRef.current, images: stagedImages.imagesRef.current });
+	}, [chatId, stagedImages.imagesRef]);
 	const applyText = useCallback((v: string) => {
 		textRef.current = v; composerEditRevision.current++;
 		setComposerDraftRevision((revision) => revision + 1);
-	}, []);
+		saveComposerDraft();
+	}, [saveComposerDraft]);
 	const recordComposerText = useCallback((v: string) => {
 		textRef.current = v; composerEditRevision.current++;
-	}, []);
+		saveComposerDraft();
+	}, [saveComposerDraft]);
+	// Restore the saved draft once per chat, never over newer learner work.
+	const { imagesRef: stagedImagesRef, setImages: setStagedImages, clearIfUnchanged: clearStagedImagesIfUnchanged } = stagedImages;
+	useEffect(() => {
+		let live = true;
+		void loadDraft(chatDraftKey(chatId)).then((draft) => {
+			if (!live || !draft) return;
+			if (!textRef.current && draft.text) applyText(draft.text);
+			if (!stagedImagesRef.current.length && draft.images.length) setStagedImages(draft.images, false);
+		});
+		return () => { live = false; };
+	}, [chatId, applyText, stagedImagesRef, setStagedImages]);
 	// Saved slot completeness is live, but the session's selected route
 	// comes from its own ordinary model control, never today's Strong pin.
 	const { catalog, configured, zeroKeys } = useModelSetup(initialConfigured);
@@ -701,7 +724,11 @@ export function Chat({
 	 *  Auto-continuations (probe answers) never set it — their refusal
 	 *  opens recovery with no replay. */
 	const draftRef = useRef<string | null>(null);
+	/** The images that rode the last explicit send (restored alongside draftRef). */
+	const draftImagesRef = useRef<ImageContent[]>([]);
 	const openingDraftRef = useRef<string | null>(null);
+	/** The opening's handed-over images while it is delivered with supplied text. */
+	const openingImagesRef = useRef<ImageContent[]>([]);
 	const [openingError, setOpeningError] = useState(false);
 	const openingMountedRef = useRef(false);
 	useEffect(() => {
@@ -802,31 +829,47 @@ export function Chat({
 			}, attempt.accepted, undefined, attempt.refused);
 		});
 	};
-	const prepareText = (supplied?: string, openingAccepted?: () => void, beforePost?: (captured: string) => boolean) => {
+	const prepareText = (supplied?: string, openingAccepted?: () => void, beforePost?: (captured: string, images: ImageContent[]) => boolean) => {
 		const target = textTarget();
 		if (!target || pendingRef.current || pluginOwnsDock || activeProblemRef.current || compacting) return Promise.resolve(false);
 		if (!busyRef.current && zeroKeys) { setSetupOpen(true); return Promise.resolve(false); }
 		if (!busyRef.current && selectedModelUnavailable(catalog, selectedModel)) { openModelPicker(); return Promise.resolve(false); }
-		let captured = "", capturedRevision = 0;
-		return runSubmission(target, () => { capturedRevision = composerEditRevision.current; return { type: "text", content: { text: captured = supplied ?? textRef.current.trim(), images: [] } }; }, () => submissionLive.current.ready && !pendingQuestionOf(submissionLive.current.nativeMessages) && !pendingPluginQuestionOf(submissionLive.current.nativeMessages) && !activeProblemOf(submissionLive.current.nativeMessages), async (prepared, attempt) => {
+		let captured = "", capturedRevision = 0, capturedImages: ImageContent[] = [];
+		return runSubmission(target, () => {
+			capturedRevision = composerEditRevision.current;
+			// Supplied text is the opening handover: its images ride with it.
+			capturedImages = (supplied !== undefined ? openingImagesRef.current : stagedImages.imagesRef.current).map(image => ({ ...image }));
+			return { type: "text", content: { text: captured = supplied ?? textRef.current.trim(), images: capturedImages.map(image => ({ ...image })) } };
+		}, () => submissionLive.current.ready && !pendingQuestionOf(submissionLive.current.nativeMessages) && !pendingPluginQuestionOf(submissionLive.current.nativeMessages) && !activeProblemOf(submissionLive.current.nativeMessages), async (prepared, attempt) => {
 			if (prepared.type !== "text") return false;
 			if (!prepared.content.text.trim() && !prepared.content.images.length) throw new Error("Message text or images are required. Your input has been kept.");
-			if (beforePost && !beforePost(captured)) { attempt.cancel(); return false; }
+			if (beforePost && !beforePost(captured, capturedImages)) { attempt.cancel(); return false; }
 			draftRef.current = captured;
-			const accepted = () => { if (composerEditRevision.current === capturedRevision && textRef.current.trim() === captured) applyText(""); openingAccepted?.(); attempt.accepted(); };
+			draftImagesRef.current = capturedImages;
+			const accepted = () => {
+				if (composerEditRevision.current === capturedRevision && textRef.current.trim() === captured) applyText("");
+				if (supplied === undefined) stagedImages.clearIfUnchanged(capturedImages);
+				openingAccepted?.(); attempt.accepted();
+			};
 			attempt.deliver();
 			if (busyRef.current) return steer(prepared.content.text, prepared.content.images, accepted, attempt.refused);
 			return send({ type: "text", text: prepared.content.text, ...(prepared.content.images.length ? { images: prepared.content.images.map(image => ({ ...image })) } : {}) }, accepted, undefined, attempt.refused);
 		});
 	};
 
+	/** An undelivered opening goes back into the composer, images included. */
+	const restoreOpeningImages = () => {
+		if (!stagedImages.imagesRef.current.length && openingImagesRef.current.length) stagedImages.setImages(openingImagesRef.current.map(image => ({ ...image })));
+	};
 	const deliverOpeningPrompt = (prompt: string, captureNative = false) => {
 		let submitted = prompt;
 		openingDraftRef.current = prompt;
 		// Persist uncertainty BEFORE the POST: another mount must restore,
 		// not race the still-arriving request. No storage means no auto-send.
-		if (!stashOpeningPrompt(chatId, prompt, true)) {
+		const openingImages = captureNative ? stagedImages.imagesRef.current : openingImagesRef.current;
+		if (!stashOpeningPrompt(chatId, prompt, true, openingImages.length > 0)) {
 			applyText(prompt);
+			restoreOpeningImages();
 			setOpeningError(true);
 			return;
 		}
@@ -834,16 +877,20 @@ export function Chat({
 		draftRef.current = prompt; // The existing 503 flow must restore it too.
 		void prepareText(captureNative ? undefined : prompt, () => {
 			clearOpeningPrompt(chatId);
+			clearOpeningImages(chatId);
 			openingDraftRef.current = null;
+			openingImagesRef.current = [];
 			if (draftRef.current === submitted) draftRef.current = null;
-		}, captured => {
+		}, (captured, images) => {
 			submitted = captured; openingDraftRef.current = captured;
-			const saved = stashOpeningPrompt(chatId, captured, true);
+			if (captureNative) { openingImagesRef.current = images; void stashOpeningImages(chatId, images); }
+			const saved = stashOpeningPrompt(chatId, captured, true, images.length > 0);
 			if (!saved) setOpeningError(true);
 			return saved;
 		}).then(accepted => {
 			if (!accepted && openingMountedRef.current && openingDraftRef.current === prompt && !textRef.current) {
 				applyText(prompt);
+				restoreOpeningImages();
 			}
 		});
 	};
@@ -857,31 +904,45 @@ export function Chat({
 				sentInitial.current = true;
 				const entry = readOpeningPromptEntry(chatId);
 				const prompt = initialPrompt || entry?.text; // Legacy links still work.
-				if (!initialPromptOwed(initialMessages, prompt)) {
-					if (initialMessages.some(m => m.role === "user" || m.role === "assistant")) clearOpeningPrompt(chatId);
+				const withImages = !initialPrompt && entry?.images === true;
+				if (!initialPromptOwed(initialMessages, prompt, withImages)) {
+					if (initialMessages.some(m => m.role === "user" || m.role === "assistant")) { clearOpeningPrompt(chatId); clearOpeningImages(chatId); }
 					return;
 				}
-				openingDraftRef.current = prompt!;
-				if (entry?.attempted || initiallyInFlight) {
-					applyText(prompt!); // Interrupted start: the learner explicitly resends.
-					return;
-				}
-				deliverOpeningPrompt(prompt!);
+				const opening = prompt ?? "";
+				openingDraftRef.current = opening;
+				const begin = (images: ImageContent[]) => {
+					if (!submissionMounted.current || openingDraftRef.current !== opening) return;
+					openingImagesRef.current = images;
+					if (entry?.attempted || initiallyInFlight) {
+						// Interrupted start: the learner explicitly resends.
+						applyText(opening);
+						restoreOpeningImages();
+						return;
+					}
+					deliverOpeningPrompt(opening);
+				};
+				// Memory first (same-tab handover), then the IndexedDB copy.
+				if (withImages) void readOpeningImages(chatId).then(begin);
+				else begin([]);
 			},
 		);
-	}, [chatId, initialPrompt, initialMessages, initiallyInFlight, surfaceTarget, deliverOpeningPrompt, applyText]);
+	}, [chatId, initialPrompt, initialMessages, initiallyInFlight, surfaceTarget, deliverOpeningPrompt, restoreOpeningImages, applyText]);
 
 	useEffect(() => {
 		if (!hasConfirmedConversation) return;
 		clearOpeningPrompt(chatId);
 		// A later canonical read may confirm a lost acknowledgment. Clear
 		// only the unchanged recovered draft, never the learner's newer work.
+		clearOpeningImages(chatId);
 		const opening = openingDraftRef.current;
 		if (opening !== null && textRef.current === opening) applyText("");
+		if (opening !== null && openingImagesRef.current.length) clearStagedImagesIfUnchanged(openingImagesRef.current);
 		if (draftRef.current === opening) draftRef.current = null;
 		openingDraftRef.current = null;
+		openingImagesRef.current = [];
 		setOpeningError(false);
-	}, [chatId, hasConfirmedConversation, applyText]);
+	}, [chatId, hasConfirmedConversation, applyText, clearStagedImagesIfUnchanged]);
 
 	// THE BYOK REFUSAL (owner, 2026-09-22): a send that lands the server's
 	// 503 models_not_configured envelope renders as the SETUP FLOW, never
@@ -912,7 +973,9 @@ export function Chat({
 			if (cancelled) return;
 			if (draftRef.current !== null) {
 				if (!textRef.current) applyText(draftRef.current);
+				if (!stagedImages.imagesRef.current.length && draftImagesRef.current.length) stagedImages.setImages(draftImagesRef.current);
 				draftRef.current = null;
+				draftImagesRef.current = [];
 			}
 			clearError();
 			if (keyRefused && catalogRef.current?.providers.some((p) => p.keyPresent)) openModelPicker();
@@ -2125,6 +2188,7 @@ export function Chat({
 							nextProblem={nextReady}
 							onNext={sendNext}
 							placeholder={nextReady ? "Ask anything, or press Enter for the next one." : undefined}
+							images={stagedImages}
 						/>
 					}
 					onSubmitAnswer={(output) => {
@@ -2292,8 +2356,8 @@ export type EscAbortTarget = "side-thread" | "mermaid" | "plan" | "setup" | "que
  * (owner report, 2026-10-04: the turn went dead behind it — the old
  * `length === 0` check saw the marker and refused to fire).
  */
-export function initialPromptOwed(messages: readonly { role: string }[], prompt: string | undefined): boolean {
-	if (!prompt) return false;
+export function initialPromptOwed(messages: readonly { role: string }[], prompt: string | undefined, withImages = false): boolean {
+	if (!prompt && !withImages) return false;
 	return !messages.some((m) => m.role === "user" || m.role === "assistant");
 }
 

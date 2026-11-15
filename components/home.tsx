@@ -18,7 +18,9 @@ import { StatsBar } from "@/components/stats-bar";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { PathInput } from "@/components/path-input";
 import { AttachFilesButton } from "@/components/attach-files-button";
-import { SessionStarter } from "@/components/start-session";
+import { SessionStarter, sessionTitleFor } from "@/components/start-session";
+import { StagedImageStrip, useStagedImages } from "@/components/staged-images";
+import { discardDraft, loadDraft, scheduleDraftSave, startDraftKey } from "@/components/draft-store";
 import type { TurnUsage } from "@/src/core";
 
 /**
@@ -101,6 +103,28 @@ export function Home({
 	 *  the composer opens the picker; the picks seed the opening prompt).
 	 *  Not enforcing any input format — the picks are a convenience. */
 	const [mode, setMode] = useState<"teach" | "practice">("teach");
+	/* The unsent draft (topic + pasted images) survives a reload (owner),
+	 * one draft per mode. Paste only here; drops stay path-based. */
+	const draftKey = startDraftKey("home", mode);
+	const draftKeyRef = useRef(draftKey);
+	draftKeyRef.current = draftKey;
+	const stagedImages = useStagedImages((images) => scheduleDraftSave(draftKeyRef.current, { text: topicRef.current, images }));
+	const { imagesRef: stagedImagesRef, setImages: setStagedImages } = stagedImages;
+	const applyTopic = (value: string) => {
+		topicRef.current = value;
+		setTopic(value);
+		scheduleDraftSave(draftKeyRef.current, { text: value, images: stagedImagesRef.current });
+	};
+	// Restore once on mount (the home always opens in teach mode).
+	useEffect(() => {
+		let live = true;
+		void loadDraft(startDraftKey("home", "teach")).then((draft) => {
+			if (!live || !draft) return;
+			if (!topicRef.current && draft.text) { topicRef.current = draft.text; setTopic(draft.text); }
+			if (!stagedImagesRef.current.length && draft.images.length) setStagedImages(draft.images, false);
+		});
+		return () => { live = false; };
+	}, [stagedImagesRef, setStagedImages]);
 	const [practiceProps, setPracticeProps] = useState<{ id: string; name: string; statement: string }[]>([]);
 	const [chainSelectOpen, setChainSelectOpen] = useState(false);
 	// The chain table is CONTROLLED off this id set (the lifted pick).
@@ -120,7 +144,8 @@ export function Home({
 	};
 	const begin = async () => {
 		const t = topicRef.current.trim();
-		if (!t || startingRef.current) return;
+		const images = stagedImagesRef.current.map(image => ({ ...image }));
+		if ((!t && images.length === 0) || startingRef.current) return;
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
 		// stays in the textarea; the learner sends it after Save).
 		if (!configured) {
@@ -152,11 +177,14 @@ export function Home({
 			// graph-context marker as message[0] (a separate custom message
 			// before the learner's first user message, propositions + the
 			// chains among them); the prompt stays the learner's own words.
+			// Image-only openings are titled "New session" (owner).
 			const target = await starterRef.current.start({
-				title: t,
+				title: sessionTitleFor(t),
 				...(mode === "practice" ? { kind: "practice" } : {}),
 				...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
-			}, fetch, JSON.stringify(catalog?.slots.strong));
+			}, fetch, JSON.stringify(catalog?.slots.strong), images.length ? { text: t, images } : undefined);
+			// The handover owns the message now; the start draft is done.
+			void discardDraft(draftKeyRef.current);
 			router.push(target);
 		} catch {
 			startingRef.current = false;
@@ -244,19 +272,18 @@ export function Home({
 					{startError && <p role="alert" className="mb-2 text-sm text-destructive">{OPENING_PROMPT_FAILURE}</p>}
 					<form
 						data-attachment-composer=""
-						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
+						className="flex flex-wrap items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
 						e.preventDefault();
 						void start();
 					}}
 				>
+					<StagedImageStrip images={stagedImages.images} onRemove={stagedImages.remove} notice={stagedImages.notice} onDismissNotice={stagedImages.dismissNotice} />
 					<PathInput
 						ref={topicInputRef}
 						value={topic}
-						onValueChange={(value) => {
-							topicRef.current = value;
-							setTopic(value);
-						}}
+						onValueChange={applyTopic}
+						onPasteImages={(files) => { void stagedImages.add(files); }}
 						defaultDropTarget
 						onKeyDown={(e) => {
 							if (!isInteractionScopeEligible(e.currentTarget, controller)) return;
@@ -285,7 +312,7 @@ export function Home({
 					<button
 						type="submit"
 						aria-label="Start session"
-						disabled={(!topic.trim() && !dictation.active) || busy}
+						disabled={(!topic.trim() && !dictation.active && stagedImages.images.length === 0) || busy}
 						className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
 					>
 						<CornerDownLeftIcon className="size-5" />

@@ -10,13 +10,17 @@ export interface OpeningPrompt {
 	text: string;
 	/** Written BEFORE sending. A later mount restores a draft, never reposts. */
 	attempted: boolean;
+	/** The opening carries images (held by the draft store's handover).
+	 *  Only then may `text` be empty: an image-only opening. */
+	images?: true;
 }
 
 const keyFor = (id: string) => `lh.openingPrompt.${id}`;
 
-export function stashOpeningPrompt(id: string, text: string, attempted = false): boolean {
+export function stashOpeningPrompt(id: string, text: string, attempted = false, images = false): boolean {
+	if (!text && !images) return false;
 	try {
-		const value = JSON.stringify({ text, attempted } satisfies OpeningPrompt);
+		const value = JSON.stringify({ text, attempted, ...(images ? { images: true as const } : {}) } satisfies OpeningPrompt);
 		// Catch both the storage getter and its methods (quota/security errors).
 		const storage = globalThis.sessionStorage;
 		storage.setItem(keyFor(id), value);
@@ -33,8 +37,9 @@ export function readOpeningPromptEntry(id: string): OpeningPrompt | undefined {
 		try {
 			const entry: unknown = JSON.parse(value);
 			if (entry && typeof entry === "object" && "text" in entry && typeof entry.text === "string" &&
-				entry.text.length > 0 && "attempted" in entry && typeof entry.attempted === "boolean") {
-				return { text: entry.text, attempted: entry.attempted };
+				"attempted" in entry && typeof entry.attempted === "boolean") {
+				const images = "images" in entry && entry.images === true;
+				if (entry.text.length > 0 || images) return { text: entry.text, attempted: entry.attempted, ...(images ? { images: true as const } : {}) };
 			}
 		} catch { /* Old raw-text stashes have no proof that sending never began. */ }
 		return { text: value, attempted: true };

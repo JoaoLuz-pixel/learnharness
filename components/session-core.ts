@@ -233,10 +233,12 @@ export interface SessionState {
 	steerQueue: SteerQueueItem[];
 }
 
-/** One queued composer steer: the client-minted id (the upsert key) + text. */
+/** One queued composer steer: the client-minted id (the upsert key) + text,
+ *  plus any images it carries (the indicator shows tiny thumbnails). */
 export interface SteerQueueItem {
 	id: string;
 	text: string;
+	images?: readonly { data: string; mimeType: string }[];
 }
 
 /** The indicator's fold (pure): a queued steer stays visible until its id
@@ -1065,7 +1067,7 @@ export class SessionModel {
 		if (!t && !images?.length) { settleDelivery(); return false; }
 		this.invalidateCanonicalReads();
 		const id = `steer_${localId()}`;
-		this.steerQueueValue = [...this.steerQueueValue, { id, text: t }];
+		this.steerQueueValue = [...this.steerQueueValue, { id, text: t, ...(images?.length ? { images: images.map(({ data, mimeType }) => ({ data, mimeType })) } : {}) }];
 		this.onChange?.();
 		const dropSteer = () => {
 			this.steerQueueValue = this.steerQueueValue.filter((s) => s.id !== id);

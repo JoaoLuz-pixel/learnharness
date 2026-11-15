@@ -116,3 +116,39 @@ describe("enterAction", () => {
 		assert.equal(enterAction({ busy: true, canSend: true, nextProblem: true }), "send");
 	});
 });
+
+describe("Composer staged images (paste)", () => {
+	const image = { type: "image" as const, data: "iVBORw0KGgo=", mimeType: "image/png" };
+	const staged = (images: typeof image[], notice = "") => ({
+		images, imagesRef: { current: images }, setImages: () => {}, add: async () => {}, remove: () => {},
+		clearIfUnchanged: () => {}, notice, setNotice: () => {}, dismissNotice: () => {},
+	});
+
+	it("renders a thumbnail row with a remove button per image, above the text field", async () => {
+		const { ChatSessionComposer } = await import("../components/composer.tsx");
+		const html = renderToStaticMarkup(
+			<ChatSessionComposer busy={false} value="" revision={0} onChange={() => {}} onSend={() => {}} onStop={() => {}}
+				sendAllowed dictationActive={false} images={staged([image, image])} />,
+		);
+		assert.match(html, /data-testid="staged-images"/);
+		assert.equal(html.match(/data-testid="remove-staged-image"/g)?.length, 2);
+		assert.ok(html.indexOf("staged-images") < html.indexOf('role="textbox"'), "the row sits above the text field");
+		assert.match(html, /src="data:image\/png;base64,iVBORw0KGgo="/);
+	});
+
+	it("an image-only draft can send", async () => {
+		const { ChatSessionComposer } = await import("../components/composer.tsx");
+		const render = (images: typeof image[]) => renderToStaticMarkup(
+			<ChatSessionComposer busy={false} value="" revision={0} onChange={() => {}} onSend={() => {}} onStop={() => {}}
+				sendAllowed dictationActive={false} images={staged(images)} />,
+		);
+		assert.match(render([]), /aria-label="Send"[^>]*disabled=""/, "nothing to send");
+		assert.doesNotMatch(render([image]), /aria-label="Send"[^>]*disabled=""/, "images alone enable send");
+	});
+
+	it("shows the admission notice; without images no strip renders", () => {
+		const html = renderToStaticMarkup(<Composer busy={false} value="" onChange={() => {}} onSend={() => {}} onStop={() => {}} canSend images={staged([], "Only PNG, JPEG, WebP or GIF images can be attached.")} />);
+		assert.match(html, /Only PNG, JPEG, WebP or GIF images can be attached\./);
+		assert.doesNotMatch(render(), /staged-images/, "plugin/default composers have no image UI");
+	});
+});

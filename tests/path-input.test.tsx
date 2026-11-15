@@ -151,7 +151,7 @@ afterEach(async () => { await cleanup?.(); cleanup = undefined; });
 
 /** linkedom has no Selection/default editing actions. The shim tests our offset
  * contract, NOT browser caret navigation or the native IME implementation. */
-async function fixture(initial: string, singleLine = false) {
+async function fixture(initial: string, singleLine = false, onPasteImages?: (files: File[]) => void) {
 	const { window: win, document: doc } = parseHTML("<html><body><div id='root'></div><button id='elsewhere'></button></body></html>");
 	let active: Element = doc.body;
 	Object.defineProperty(doc, "activeElement", { get: () => active });
@@ -175,7 +175,7 @@ async function fixture(initial: string, singleLine = false) {
 	const writes: string[] = [];
 	let keys = 0;
 	function draw() {
-		reactRoot.render(<PathInput ref={ref} singleLine={singleLine} value={value} onValueChange={(next) => { writes.push(next); value = next; draw(); }} onKeyDown={() => { keys++; }} />);
+		reactRoot.render(<PathInput ref={ref} singleLine={singleLine} value={value} onValueChange={(next) => { writes.push(next); value = next; draw(); }} onKeyDown={() => { keys++; }} onPasteImages={onPasteImages} />);
 	}
 	await act(async () => { draw(); });
 	cleanup = async () => {
@@ -436,6 +436,29 @@ test("image/file-only paste prevents native insertion without deleting selected 
 	}
 	assert.deepEqual(f.writes, []);
 	assert.equal(f.root.querySelectorAll(`[${PATH_SOURCE_ATTRIBUTE}]`).length, 1);
+});
+
+test("opted-in image paste stages image files and still inserts the plain text (owner: both)", async () => {
+	const staged: File[][] = [];
+	const f = await fixture("ab", false, (files) => staged.push(files));
+	f.select(1);
+	const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+	const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+	const paste = await f.event("paste", { clipboardData: { files: [image, pdf], getData: (type: string) => type === "text/plain" ? "X" : "" } });
+	assert.equal(paste.defaultPrevented, true);
+	assert.deepEqual(staged, [[image]], "only image files reach the composer");
+	assert.equal(f.value, "aXb", "the text in the same paste is inserted");
+	await f.event("paste", { clipboardData: { files: [image], getData: () => "" } });
+	assert.equal(staged.length, 2);
+	assert.equal(f.value, "aXb", "an image-only paste leaves the text alone");
+});
+
+test("without the opt-in, pasted images are ignored exactly as before", async () => {
+	const f = await fixture("ab");
+	const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+	await f.event("paste", { clipboardData: { files: [image], getData: () => "" } });
+	assert.equal(f.value, "ab");
+	assert.deepEqual(f.writes, []);
 });
 
 test("empty clipboard text stays a no-op before, during and after IME with a chip selected", async () => {
