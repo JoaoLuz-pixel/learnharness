@@ -126,6 +126,7 @@ import {
 	questionNeedsReveal,
 } from "@/src/core";
 import { ReadingThinkingField } from "@/components/reading-thinking";
+import { PauseQuestionDialog, pauseConfirmed, rememberPauseConfirmed } from "@/components/pause-question-dialog";
 import { currentUserThinkingOpen, setAllUserThinkingOpen } from "@/components/thinking-block";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
@@ -659,6 +660,26 @@ export function Chat({
 		readingThinkingRef.current = "";
 		setReadingThinkingSeed((previous) => ({ ...previous, value: "", revision: previous.revision + 1 }));
 	}, []);
+	/* THE PAUSE SEND (owner, 2026-11-15): the reading-thinking box posts
+	 * its text NOW — the open question closes with a paused result and the
+	 * teacher replies (one atomic pause-question input). First use asks
+	 * once; the text clears only when the server accepts it. */
+	const [pauseConfirmOpen, setPauseConfirmOpen] = useState(false);
+	const pauseAndSend = () => {
+		const question = pendingRef.current;
+		const text = readingThinkingRef.current.trim();
+		if (!question || !text || busyRef.current) return;
+		void send({ type: "pause-question", toolCallId: question.toolCallId, text }, () => {
+			if (readingThinkingRef.current.trim() === text) clearReadingThinking();
+		});
+	};
+	const requestPauseSend = () => {
+		void finishDictation().then(() => {
+			if (!readingThinkingRef.current.trim() || busyRef.current) return;
+			if (pauseConfirmed()) pauseAndSend();
+			else setPauseConfirmOpen(true);
+		});
+	};
 	const pendingQuestionId = pendingPlugin ? pluginQuestionOccurrenceKey(pendingPlugin.occurrence) : pending?.key ?? null;
 	useLayoutEffect(() => {
 		// Different calls never share a draft; a failed submission of THIS
@@ -2138,6 +2159,9 @@ export function Chat({
 					readingThinking={readingThinkingSeed.value}
 					readingThinkingRevision={readingThinkingSeed.revision}
 					onReadingThinking={(value) => { applyReadingThinking(value); if (pendingPlugin) pluginQuestionDraft(pendingPlugin).readingThinking = value; }}
+					// Builtin questions only: plugin questions own their own protocol.
+					onSendReadingThinking={pending && !pendingPlugin ? requestPauseSend : undefined}
+					readingSendDisabled={busy || compacting || submissionRunner.occupied}
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
 					contextTokens={contextTokens}
@@ -2282,6 +2306,8 @@ export function Chat({
 				)}
 				</SurfaceRegion>
 				<AbortTurnDialog mode={abortAsk} onClose={closeAbortAsk} onConfirm={confirmAbort} busy={busy} />
+				<PauseQuestionDialog open={pauseConfirmOpen} onClose={() => setPauseConfirmOpen(false)}
+					onConfirm={(remember) => { if (remember) rememberPauseConfirmed(); setPauseConfirmOpen(false); pauseAndSend(); }} />
 				</div>
 			</div>
 		</div>
@@ -2452,6 +2478,8 @@ export function DockOverlay({
 	readingThinking,
 	readingThinkingRevision,
 	onReadingThinking,
+	onSendReadingThinking,
+	readingSendDisabled = false,
 	phase,
 	turns,
 	contextTokens,
@@ -2511,6 +2539,10 @@ export function DockOverlay({
 	readingThinking: string;
 	readingThinkingRevision: number;
 	onReadingThinking: (v: string) => void;
+	/** The pause send from the reading box; absent = no send button. */
+	onSendReadingThinking?: () => void;
+	/** A turn, compaction or submission is in flight: the send waits. */
+	readingSendDisabled?: boolean;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
 	/** The session's usage log — the stats bar beneath the composer folds it. */
@@ -2937,6 +2969,8 @@ export function DockOverlay({
 									: undefined
 							}
 							claim={revealPending}
+							onSend={onSendReadingThinking}
+							sendDisabled={readingSendDisabled}
 						/>
 					)}
 					<div ref={shellRef} data-attachment-composer="" className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">

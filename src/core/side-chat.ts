@@ -362,6 +362,11 @@ function answeredQuestionMarkdown(result: ToolResultMessage, input: Record<strin
 	lines.push(`**Q:** ${answer.questionText}`);
 	const details = typeof input?.details === "string" ? input.details.trim() : "";
 	if (details) lines.push(details);
+	if (answer.dismissed && answer.paused) {
+		// The teacher may ask it again: its answer stays as hidden as an OPEN one.
+		lines.push("The learner paused this question to say something first; it may be asked again, so treat its answer key as hidden.");
+		return lines.join("\n\n");
+	}
 	if (answer.dismissed) {
 		lines.push("The learner skipped this question.");
 		return lines.join("\n\n");

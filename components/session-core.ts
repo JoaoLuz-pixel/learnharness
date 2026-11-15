@@ -27,6 +27,7 @@ import {
 	newProblemDismissedMarker,
 	newThinkingMessage,
 	newUserMessage,
+	pauseQuestionAppends,
 	projectView,
 	type ChatInput,
 	type LhMarkerMessage,
@@ -943,6 +944,12 @@ export class SessionModel {
 			const result = { ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() };
 			optimistic.push(result);
 			this.unconfirmedAnswers.set(result.id, expectedKey ?? input.toolCallId);
+		} else if (input.type === "pause-question") {
+			// The pause pair (reading-thinking send): the paused card and the
+			// learner's bubble render at once — the same appends the server
+			// writes ahead. A stale target refuses before anything posts.
+			try { optimistic.push(...pauseQuestionAppends({ messages: this.nativeHistory() }, input).map(message => ({ ...message, id: localId() }))); }
+			catch { this.setStatus("ready"); return refused(); }
 		}
 		if (optimistic.length > 0) this.mutate(() => {
 			this.tail = [...this.tail, ...optimistic];

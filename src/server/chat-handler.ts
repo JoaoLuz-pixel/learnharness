@@ -181,6 +181,13 @@ setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 setFileAccessPolicy(fileAccessPolicy);
 
 /** The route-facing entry: parse {chatId, input} and run one turn. */
+/** A pause's tool result stays adjacent to its calling assistant message
+ *  (the provider shape law); side-question updates go between it and the
+ *  learner's message, exactly where a plain text send would carry them. */
+function resultFirst(appends: readonly LhMessage[], updates: readonly LhMessage[]): LhMessage[] {
+	return [...appends.slice(0, 1), ...updates, ...appends.slice(1)];
+}
+
 export async function handleChatRequest(
 	req: Request,
 	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
@@ -225,7 +232,7 @@ export async function handleChatInput(
 	let record = initialRecord;
 
 	const capturedSession = { createdAt: record.createdAt, kind: record.kind };
-	const freshSubmission = input.type === "text" || input.type === "thinking" || input.type === "answer" || input.type === "plugin-question-answer" || input.type === "plugin-problem-submission";
+	const freshSubmission = input.type === "text" || input.type === "thinking" || input.type === "answer" || input.type === "pause-question" || input.type === "plugin-question-answer" || input.type === "plugin-problem-submission";
 	try {
 		assertPluginQuestionInputAllowed(record.messages, input);
 		if (input.type !== "steers") assertNativeSubmissionTarget(record.messages, input);
@@ -240,7 +247,7 @@ export async function handleChatInput(
 		if (err instanceof ChatInputError) return Response.json({ error: err.message }, { status: 400 });
 		throw err;
 	}
-	if ((input.type === "plugin-question-answer" || input.type === "plugin-problem-submission") && isTurnRunning(chatId))
+	if ((input.type === "plugin-question-answer" || input.type === "plugin-problem-submission" || input.type === "pause-question") && isTurnRunning(chatId))
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 	let questionResolver: QuestionTypeResolver | undefined;
 	let problemResolver: ProblemTypeResolver | undefined;
@@ -416,7 +423,7 @@ export async function handleChatInput(
 					if (hasUnresolvedQuestion(after)) return current.messages;
 					const updates = sideConversationEntries({ messages: current.messages, sideChats: sideContext.snapshot(chatId) }, after);
 					if (!updates.length) return current.messages;
-					const projected = [...current.messages, ...(input.type === "answer" || input.type === "retry-question" ? [...next, ...updates] : [...updates, ...next])];
+					const projected = [...current.messages, ...(input.type === "answer" || input.type === "retry-question" ? [...next, ...updates] : input.type === "pause-question" ? resultFirst(next, updates) : [...updates, ...next])];
 					const omitted = input.type === "retry" ? retryDrops(current.messages) : new Set<string>();
 					return projected.filter((message) => !omitted.has(message.id));
 				} catch (error) {
@@ -580,7 +587,7 @@ export async function handleChatInput(
 	const sideQuestions = hasUnresolvedQuestion(afterInput) ? [] : sideConversationEntries({
 		messages: record.messages, sideChats: sideContextSnapshots,
 	}, afterInput);
-	const withSideQuestions = input.type === "answer" || input.type === "retry-question" || input.type === "plugin-question-answer" ? [...appends, ...sideQuestions] : [...sideQuestions, ...appends];
+	const withSideQuestions = input.type === "answer" || input.type === "retry-question" || input.type === "plugin-question-answer" ? [...appends, ...sideQuestions] : input.type === "pause-question" ? resultFirst(appends, sideQuestions) : [...sideQuestions, ...appends];
 	const prospective = [...record.messages, ...withSideQuestions].filter((message) => !retryOmissions.has(message.id));
 	const sideContextBlocked = sideQuestions.length > 0 && !fitsSideContext(prospective);
 	// An automatic batch has not been admitted; refuse it without persisting

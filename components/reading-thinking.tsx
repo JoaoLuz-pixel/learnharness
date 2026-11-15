@@ -4,6 +4,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "
 import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { composingQuestionKey, pluginQuestionKeySuppressed } from "./plugin-question-keys";
 import { PathInput } from "@/components/path-input";
+import { CornerDownLeftIcon } from "lucide-react";
 import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 
@@ -30,6 +31,8 @@ export function ReadingThinkingField({
 	onOpen,
 	claim,
 	inputRef,
+	onSend,
+	sendDisabled = false,
 }: {
 	value: string;
 	revision: number;
@@ -44,6 +47,11 @@ export function ReadingThinkingField({
 	/** Primary dictation claim — true while the check is behind its reveal. */
 	claim: boolean;
 	inputRef?: RefObject<HTMLDivElement | null>;
+	/** THE PAUSE SEND (owner, 2026-11-15): post this text now, pausing
+	 *  the open question. Button + ⌘/Ctrl+Enter. Absent = no send. */
+	onSend?: () => void;
+	/** A turn is running: the send waits (the button shows disabled). */
+	sendDisabled?: boolean;
 }) {
 	const controller = useOptionalInteractionLayers();
 	const [draft, setDraft] = useState(value);
@@ -93,6 +101,14 @@ export function ReadingThinkingField({
 						onEscape?.();
 						return;
 					}
+					// ⌘/Ctrl+Enter SENDS when this field can send (owner,
+					// 2026-11-15) — ahead of the open-the-check rule below.
+					if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSend) {
+						e.preventDefault();
+						e.stopPropagation();
+						if (!sendDisabled && draftRef.current.trim()) onSend();
+						return;
+					}
 					// ENTER OPENS THE WAITING CHECK (owner, keyboard round
 					// 2026-10-06): while the check sits closed, plain Enter
 					// (and the universal ⌘/Ctrl+Enter) opens it — the dictation
@@ -115,6 +131,21 @@ export function ReadingThinkingField({
 				placeholder="Whatever comes to mind as you read."
 				className="field-sizing-content lh-input max-h-40 w-full resize-none bg-transparent py-0.5 outline-none placeholder:text-muted-foreground/70"
 			/>
+			{onSend && (
+				<div className="flex justify-end pt-1">
+					<button
+						type="button"
+						data-testid="reading-thinking-send"
+						aria-label="Pause question and send"
+						title="Pause question and send"
+						disabled={sendDisabled || !draft.trim()}
+						onClick={onSend}
+						className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+					>
+						<CornerDownLeftIcon className="size-3.5" />
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }

@@ -28,7 +28,7 @@
  * turn rides one composition.
  */
 
-import type { QuestionAnswerData } from "./question-core.ts";
+import { pausedAnswer, type QuestionAnswerData } from "./question-core.ts";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { validatePluginSubmissionImageArray, validatePluginSubmissionImages, type PluginSubmissionImages, type PluginSubmissionOccurrence } from "./plugin-submissions.ts";
 import type { LhMessage } from "./native-messages.ts";
@@ -76,7 +76,12 @@ export type ChatInput =
 	 *  explicit go-ahead during the between-problems pause — the Next
 	 *  chip or Enter on an empty composer. Practice sessions only, and
 	 *  only with nothing active (mid-problem input rides the dock). */
-	| { type: "next" };
+	| { type: "next" }
+	/** The reading-thinking send (owner, 2026-11-15): close the dangling
+	 *  question with a PAUSED result and post the learner's text as a
+	 *  plain message, atomically — one turn, the teacher replies and
+	 *  decides what comes next. Text only. */
+	| { type: "pause-question"; toolCallId: string; text: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -175,6 +180,20 @@ export function dismissAppends(record: { messages: LhMessage[] }, input: Dismiss
 		throw new ChatInputError("dismiss input's answer kind does not match the question");
 	}
 	return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
+}
+
+/** The pause pair: the PAUSED result for exactly the dangling call (bound
+ *  by id, built server-side from the call's own question text), then the
+ *  learner's message. Refused while any OTHER question would still dangle:
+ *  nothing may generate past an unresolved call (the adjacency law). */
+export function pauseQuestionAppends(record: { messages: LhMessage[] }, input: { toolCallId: string; text: string }): LhMessage[] {
+	const pending = danglingQuestionOf(record.messages);
+	if (!pending || pending.toolCallId !== input.toolCallId) throw new ChatInputError("pause-question input targets no pending question call");
+	const callInput = pending.input as { question?: unknown } | null;
+	const questionText = typeof callInput?.question === "string" ? callInput.question : "";
+	const result = newAnswerResult(input.toolCallId, pending.tool, pausedAnswer(toolQuestionKind(pending.tool), questionText));
+	if (danglingQuestionOf([...record.messages, result])) throw new ChatInputError("Answer or skip the other open questions before pausing this one");
+	return [result, newUserMessage(input.text)];
 }
 
 /** A malformed input event (the honest 400 — the orphan-trap discipline). */
@@ -282,6 +301,11 @@ export function parseChatInput(input: unknown): ChatInput {
 		}
 		case "next":
 			return { type: "next" };
+		case "pause-question": {
+			if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) throw new ChatInputError("pause-question input requires toolCallId");
+			if (typeof i.text !== "string" || !i.text.trim()) throw new ChatInputError("pause-question input requires non-empty text");
+			return { type: "pause-question", toolCallId: i.toolCallId, text: i.text };
+		}
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -316,6 +340,8 @@ export function inputAppends(
 			}
 			return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
 		}
+		case "pause-question":
+			return pauseQuestionAppends(record, input);
 		case "continue":
 			return dismissalConclusion(record);
 		case "retry":

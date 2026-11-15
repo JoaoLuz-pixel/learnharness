@@ -100,6 +100,7 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 				answers: string[];
 				other: string;
 				dismissed: boolean;
+				paused: boolean;
 		  }>
 		| undefined;
 
@@ -119,7 +120,8 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 						: "Recall check"; // explain — the teach free-recall name
 		const question = typeof out?.questionText === "string" && out.questionText ? out.questionText : "(no question text)";
 		const body = [`**Q:** ${question}`];
-		if (out?.dismissed === true) body.push("The learner skipped this check.");
+		if (out?.dismissed === true && out.paused === true) body.push("The learner paused this check to say something first.");
+		else if (out?.dismissed === true) body.push("The learner skipped this check.");
 		else if (out?.dontKnow === true) body.push("The learner did not know.");
 		else if (out?.correct === true) body.push("The learner answered correctly.");
 		else if (out?.correct === false) body.push("The learner answered incorrectly.");
@@ -164,6 +166,7 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 		];
 		if (typeof out?.text === "string" && out.text.trim()) body.push(`The learner answered: ${out.text.trim()}`);
 		else if (chosen.length > 0) body.push(`The learner chose: ${chosen.join(", ")}`);
+		else if (out?.dismissed === true && out.paused === true) body.push("The learner paused this question to say something first.");
 		else if (out?.dismissed === true) body.push("The learner skipped this question.");
 		if (typeof out?.note === "string" && out.note) body.push(`*(his thinking: ${out.note})*`);
 		return { heading: "Question", body };
