@@ -1,4 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai";
+import { deviceSync } from "./device-sync.ts";
 import {
 	createPracticeAgent,
 	createProberAgent,
@@ -249,6 +250,12 @@ export async function handleChatInput(
 	}
 	if ((input.type === "plugin-question-answer" || input.type === "plugin-problem-submission" || input.type === "pause-question") && isTurnRunning(chatId))
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
+	// DEVICE SYNC (owner, 2026-11-15): a session mid-turn on ANOTHER device is
+	// read-only here until that turn ends — two devices never write one session.
+	if (input.type !== "steers") {
+		const remoteLock = deviceSync().remoteLockFor(chatId);
+		if (remoteLock) return Response.json({ error: `This session is active on ${remoteLock.deviceName} right now. It opens here when that turn finishes.` }, { status: 409 });
+	}
 	let questionResolver: QuestionTypeResolver | undefined;
 	let problemResolver: ProblemTypeResolver | undefined;
 	if (input.type === "plugin-problem-submission") {
@@ -351,7 +358,7 @@ export async function handleChatInput(
 	const capturedConversation = JSON.stringify(conversation);
 	try {
 		switch (input.type) {
-			case "text": case "thinking":
+			case "text": case "thinking": case "pause-question":
 				input = { ...input, images: await prepareSubmissionImages(input.images, conversationEngine) };
 				break;
 			case "answer":

@@ -142,6 +142,19 @@ export function useServerEvent<K extends ServerEventType>(type: K, cb: (payload:
 	}, [hub, type]);
 }
 
+/** useServerEvent for ambient widgets (Device Sync's indicator) that may
+ *  render outside the provider, e.g. in isolated tests: no hub → no-op. */
+export function useOptionalServerEvent<K extends ServerEventType>(type: K, cb: (payload: ServerEvents[K]) => void): void {
+	const hub = useContext(EventsContext);
+	const cbRef = useRef(cb);
+	cbRef.current = cb;
+	useEffect(() => {
+		if (!hub) return;
+		const off = hub.subscribe(type, (payload) => cbRef.current(payload));
+		return () => { off(); };
+	}, [hub, type]);
+}
+
 /** Refetch truth on every (re)connect of the window's channel — the
  *  self-heal seam for EventSource reconnects and dev-server restarts. */
 export function useServerResync(cb: () => void): void {

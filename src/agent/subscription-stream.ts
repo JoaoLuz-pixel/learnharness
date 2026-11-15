@@ -6,15 +6,24 @@ import { nativeSubscriptionId, nativeSubscriptionBackgroundAllowed, subscription
 import { markUnadmittedUsage, type SubscriptionDispatchLifecycle } from "./subscription-request-cycle.ts";
 import { capturePreparedBackgroundPayload } from "./background-capture.ts";
 
-export function nativeSubscriptionError(provider: string, message: string): string {
+export function nativeSubscriptionError(provider: string, message: string, dispatchAttempted = false): string {
 	const label = NATIVE_SUBSCRIPTIONS.find((p) => p.logicalId === provider)?.label ?? "Subscription";
 	const suffix = " No API-key fallback was used.";
-	if (/background/i.test(message)) return `${label} background use is off in this app. Enable it in Providers to run this work.${suffix}`;
-	if (/quota|429|limit/i.test(message)) return `${label} usage limit reached. Check your provider account and try again later.${suffix}`;
-	if (/expired|invalid_grant|401|refresh/i.test(message)) return `${label} authorization could not be refreshed. Retry or reconnect in Providers.${suffix}`;
-	if (/cancel|abort|closed|disconnect/i.test(message)) return `${label} request cancelled or connection closed.${suffix}`;
-	if (/catalog|model|stale|changed/i.test(message)) return `The selected ${label} model or connection is unavailable. Refresh Providers and explicitly choose an available model.${suffix}`;
-	return `${label} request failed. Check the connection, account access and provider limits, then retry.${suffix}`;
+	const status = /\b(?:HTTP(?:\/\d(?:\.\d)?)?[\s-]*|status(?:\s+code)?\s*[:=]?\s*)([1-5]\d{2})\b/i.exec(message)?.[1];
+	const category = status ? "provider_response"
+		: /background/i.test(message) ? "background_permission"
+		: /quota|limit/i.test(message) ? "usage_limit"
+		: /expired|invalid_grant|401|refresh|authorization/i.test(message) ? "authorization"
+		: /cancel|abort|closed|disconnect/i.test(message) ? "cancelled_or_disconnected"
+		: /catalog|model|stale|changed/i.test(message) ? "model_or_connection"
+		: "provider_error";
+	const diagnostic = `[Diagnostic: ${category}; dispatch ${dispatchAttempted ? "attempted" : "not attempted"}${status ? `; HTTP ${status}` : ""}]`;
+	if (/background/i.test(message)) return `${label} background use is off in this app. Enable it in Providers to run this work. ${diagnostic}${suffix}`;
+	if (/quota|429|limit/i.test(message)) return `${label} usage limit reached. Check your provider account and try again later. ${diagnostic}${suffix}`;
+	if (/expired|invalid_grant|401|refresh/i.test(message)) return `${label} authorization could not be refreshed. Retry or reconnect in Providers. ${diagnostic}${suffix}`;
+	if (/cancel|abort|closed|disconnect/i.test(message)) return `${label} request cancelled or connection closed. ${diagnostic}${suffix}`;
+	if (/catalog|model|stale|changed/i.test(message)) return `The selected ${label} model or connection is unavailable. Refresh Providers and explicitly choose an available model. ${diagnostic}${suffix}`;
+	return `${label} request failed. Check the connection, account access and provider limits, then retry. ${diagnostic}${suffix}`;
 }
 export function subscriptionHistory(context: TranscriptContext, logical: Model<Api>, nativeId: string): TranscriptContext {
 	const messages = transformMessages(context.messages, logical);
@@ -82,7 +91,7 @@ export function nativeSubscriptionStream(provider: Provider, background: () => b
 			} catch (error) {
 				if (terminal) return;
 				if (!committed) { markUnadmittedUsage(partial.usage); lifecycle?.noDispatch(await subscriptionDenial(scope, controller, options?.signal?.aborted === true, purpose)); }
-				partial = { ...partial, stopReason: signal.aborted ? "aborted" : "error", errorMessage: nativeSubscriptionError(logicalModel.provider, error instanceof Error ? error.message : "") };
+				partial = { ...partial, stopReason: signal.aborted ? "aborted" : "error", errorMessage: nativeSubscriptionError(logicalModel.provider, error instanceof Error ? error.message : "", committed) };
 				output.push({ type: "error", reason: partial.stopReason as "error" | "aborted", error: partial });
 			} finally { release(); output.end(); }
 		})();

@@ -5,6 +5,8 @@ import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { composingQuestionKey, pluginQuestionKeySuppressed } from "./plugin-question-keys";
 import { PathInput } from "@/components/path-input";
 import { CornerDownLeftIcon } from "lucide-react";
+import { StagedImageStrip, type StagedImages } from "./staged-images";
+import { imageFilesOf } from "./composer-images";
 import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 
@@ -33,6 +35,7 @@ export function ReadingThinkingField({
 	inputRef,
 	onSend,
 	sendDisabled = false,
+	images,
 }: {
 	value: string;
 	revision: number;
@@ -52,6 +55,8 @@ export function ReadingThinkingField({
 	onSend?: () => void;
 	/** A turn is running: the send waits (the button shows disabled). */
 	sendDisabled?: boolean;
+	/** Images in the box (owner, 2026-11-15): paste, or drop ONTO the box. */
+	images?: StagedImages;
 }) {
 	const controller = useOptionalInteractionLayers();
 	const [draft, setDraft] = useState(value);
@@ -68,18 +73,32 @@ export function ReadingThinkingField({
 		useCallback((text: string) => applyDraft(joinDictation(draftRef.current, text)), [applyDraft]),
 		claim,
 	);
+	const hasImages = (images?.images.length ?? 0) > 0;
+	const canSend = !!draft.trim() || hasImages;
 	return (
 		<div
 			data-testid="reading-thinking-field"
 			className="pointer-events-auto mb-2 rounded-2xl border bg-card/60 px-3 py-2 transition-colors focus-within:border-primary/50"
+			/* A drop ON the box stays in the box; the chat-wide drop zone sees
+			   defaultPrevented and only clears its indicator. */
+			onDragOver={images ? (e) => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } } : undefined}
+			onDrop={images ? (e) => {
+				const files = Array.from(e.dataTransfer.files);
+				const picked = imageFilesOf(files);
+				if (!picked.length) return; // not images: the usual drop handling applies
+				e.preventDefault();
+				void images.add(picked).then(() => { if (picked.length < files.length) images.setNotice("Only images can be added here."); });
+			} : undefined}
 		>
 			<div className="pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				Thinking while reading
 			</div>
+			{images && <StagedImageStrip images={images.images} onRemove={images.remove} notice={images.notice} onDismissNotice={images.dismissNotice} />}
 			<PathInput
 				ref={inputRef}
 				value={draft}
 				onValueChange={applyDraft}
+				onPasteImages={images ? (files) => { void images.add(files); } : undefined}
 				/* py-0.5 (owner round, 2026-10-07): the scrollbar fix. Source
 				   Sans 3's font box is 22px at 16px; lh-input's 1.25 leading
 				   gives a 20px line box — the content area sticks 1px below the
@@ -106,7 +125,7 @@ export function ReadingThinkingField({
 					if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSend) {
 						e.preventDefault();
 						e.stopPropagation();
-						if (!sendDisabled && draftRef.current.trim()) onSend();
+						if (!sendDisabled && (draftRef.current.trim() || hasImages)) onSend();
 						return;
 					}
 					// ENTER OPENS THE WAITING CHECK (owner, keyboard round
@@ -138,7 +157,7 @@ export function ReadingThinkingField({
 						data-testid="reading-thinking-send"
 						aria-label="Pause question and send"
 						title="Pause question and send"
-						disabled={sendDisabled || !draft.trim()}
+						disabled={sendDisabled || !canSend}
 						onClick={onSend}
 						className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
 					>

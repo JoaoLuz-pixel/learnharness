@@ -88,9 +88,12 @@ export function FilePathDropZone({ children, className, onContentRoot }: {
 			onDragEnd={clearDrag}
 			onDrop={(event) => {
 				if (!hasFiles(event)) return;
+				// A nested target (the reading box) already took this drop.
+				const claimed = event.defaultPrevented;
 				event.preventDefault();
 				event.stopPropagation();
 				clearDrag();
+				if (claimed) { setNotice(""); return; }
 				const dropped = Array.from(event.dataTransfer.files);
 				// In an open chat, image files go inline (owner); everything else
 				// keeps the path behavior. Unsupported images get the composer's

@@ -4,7 +4,7 @@ import { normalizeContext, type Api, type AssistantMessage, type Model } from "@
 import { piModels, piEngineForSpec } from "../src/agent/models.ts";
 import { NATIVE_SUBSCRIPTIONS, type NativeSubscriptionSnapshot } from "../src/core/contracts/subscriptions.ts";
 import { refreshSubscriptionModels, nativeSubscriptionModels, subscriptionAbortController, subscriptionRequest } from "../src/agent/subscription-bridge.ts";
-import { subscriptionHistory } from "../src/agent/subscription-stream.ts";
+import { nativeSubscriptionError, subscriptionHistory } from "../src/agent/subscription-stream.ts";
 import { runSubagent } from "../src/agent/subagents/pi-run.ts";
 import * as fs from "node:fs";
 import os from "node:os";
@@ -43,6 +43,14 @@ test("logical subscription routes are separate catalog entries without rewriting
 		assert(nativeSubscriptionModels().some((m) => m.provider === p.logicalId));
 		assert(piModels().getModels(p.providerId).every((m) => m.provider === p.providerId));
 	}
+});
+test("subscription errors expose only a safe diagnostic category and HTTP status", () => {
+	const rejected = nativeSubscriptionError("github-copilot-subscription", "HTTP 403: private-fixture-provider-detail", true);
+	assert.match(rejected, /\[Diagnostic: provider_response; dispatch attempted; HTTP 403\]/);
+	assert(!rejected.includes("private-fixture-provider-detail"));
+	const unavailable = nativeSubscriptionError("github-copilot-subscription", "Native model unavailable");
+	assert.match(unavailable, /\[Diagnostic: model_or_connection; dispatch not attempted\]/);
+	assert(!unavailable.includes("Native model unavailable"));
 });
 for (const p of NATIVE_SUBSCRIPTIONS) test(`${p.providerId}: every SDK transport keeps native identity, account auth and selected model before dispatch`, async (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-subscription-capture-"));

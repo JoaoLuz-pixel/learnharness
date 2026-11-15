@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { HostDialog } from "@/components/host-dialog";
+import { SyncDeleteNotice, useSyncDeleteGate, type SyncDeleteGate } from "@/components/sync-delete-notice";
 
 /** The 409 extraction_running line (owner phrasing, node interlude):
  *  the server's error names the extraction; the ACTIVITY DOCK is the
@@ -36,6 +37,7 @@ export function DeleteNodeBody({
 	onClose,
 	onRun,
 	renderFrame,
+	syncGate,
 }: {
 	/** One node (the canvas context menu) or many (the chain table's
 	 *  selection). One names it alone; many pluralize the title and
@@ -47,6 +49,8 @@ export function DeleteNodeBody({
 	onClose: () => void;
 	onRun: () => void;
 	renderFrame?: (frame: ReactElement<{ children: ReactNode }>) => ReactNode;
+	/** Device Sync on: the extra everywhere-approval gates Delete. */
+	syncGate?: SyncDeleteGate;
 }) {
 	const frame = (
 		<div
@@ -90,6 +94,7 @@ export function DeleteNodeBody({
 			<p className="mt-2 text-xs text-muted-foreground" data-testid="folder-removal-explanation">
 				{folders.length > 0 ? "Only the named empty folders are removed. " : ""}Sessions, imported source records, and non-empty folders are kept.
 			</p>
+			{syncGate && <SyncDeleteNotice gate={syncGate} disabled={busy} what={nodes.length + folders.length === 1 ? "it" : "them"} />}
 			{failure && (
 				<div
 					role="alert"
@@ -124,7 +129,7 @@ export function DeleteNodeBody({
 					type="button"
 					data-testid="node-delete-confirm"
 					onClick={onRun}
-					disabled={busy}
+					disabled={busy || (syncGate !== undefined && !syncGate.approved)}
 					// Destructive red (owner, polish round) — the
 					// app's established destructive pair (chat's
 					// refusal banner): border + text, fill on hover.
@@ -162,11 +167,13 @@ export function DeleteNodeDialog({
 }) {
 	const [busy, setBusy] = useState(false);
 	const hasItems = Boolean(nodes?.length || folders.length);
+	const { gate: syncGate, reset: resetSyncGate } = useSyncDeleteGate();
 	const [failure, setFailure] = useState<{ code: string; error: string } | null>(null);
 
 	// Fresh state per dialog: closing resets.
 	useEffect(() => {
 		if (!hasItems) {
+			resetSyncGate();
 			setBusy(false);
 			setFailure(null);
 		}
@@ -178,7 +185,7 @@ export function DeleteNodeDialog({
 	// still stands (extraction_running especially must not be plowed
 	// through). onDeleted fires with everything that actually died.
 	const run = async () => {
-		if (!hasItems || busy) return;
+		if (!hasItems || busy || (syncGate && !syncGate.approved)) return;
 		setBusy(true);
 		setFailure(null);
 		const dead: string[] = [];
@@ -225,6 +232,7 @@ export function DeleteNodeDialog({
 				failure={failure}
 				onClose={onClose}
 				onRun={() => void run()}
+				syncGate={syncGate}
 				renderFrame={(frame) => <HostDialog open frame={frame} onClose={() => {
 					if (busy) return "blocked";
 					onClose(); return "closed";

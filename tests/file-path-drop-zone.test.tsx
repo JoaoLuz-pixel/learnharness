@@ -317,3 +317,14 @@ test("drop indicator copy", () => {
 	assert.equal(dropLabel(true, false), "Drop to attach file paths");
 	assert.match(dropLabel(false, false), /desktop app/);
 });
+
+test("a drop already claimed by a nested target (the reading box) is left alone", async () => {
+	const inline: File[][] = [];
+	const f = await fixture({ imageTarget: (files) => inline.push(files) });
+	const shot = f.imageFile("shot.png", "/pics/shot.png");
+	const transfer = f.transfer([shot]);
+	f.editor.addEventListener("drop", (event) => event.preventDefault(), { once: true });
+	await f.event("drop", transfer, f.editor);
+	assert.deepEqual(inline, [], "the chat composer did not also take it");
+	assert.equal(f.value, "readthis");
+});

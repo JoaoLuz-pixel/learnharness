@@ -885,7 +885,7 @@ export class SessionModel {
 		if (input.type === "answer" && questionKey !== undefined &&
 			(subject?.key !== questionKey || subject.toolCallId !== input.toolCallId)) return refused();
 		const expectedKey = questionKey ?? (input.type === "answer" && subject?.toolCallId === input.toolCallId ? subject.key : undefined);
-		const imageBearing = input.type === "text" || input.type === "thinking" ? !!input.images?.length
+		const imageBearing = input.type === "text" || input.type === "thinking" || input.type === "pause-question" ? !!input.images?.length
 			: input.type === "answer" ? Object.values(input.answer.images ?? {}).some(images => images?.length)
 				: (input.type === "plugin-question-answer" || input.type === "plugin-problem-submission") && Object.values(input.images ?? {}).some(images => images?.length);
 		this.retireImagePreview(this.imagePreview?.owner ?? null);

@@ -141,6 +141,16 @@ export const PROMPTS_OVERRIDE_DIR = path.join(/* turbopackIgnore: true */ DATA_R
 export const THEMES_DIR = path.join(/* turbopackIgnore: true */ DATA_ROOT, "themes");
 
 /**
+ * DEVICE SYNC's private state (owner, 2026-11-15): the device key, each
+ * synced file's last-synced BASE, conflicts, backups and set-aside
+ * snapshots. Deliberately OUTSIDE the data dir so sync state never syncs.
+ * Desktop: userData/sync (LH_SYNC_DIR); dev: a sibling of data/.
+ */
+export const SYNC_DIR = process.env.LH_SYNC_DIR
+	? path.resolve(/* turbopackIgnore: true */ process.env.LH_SYNC_DIR)
+	: path.join(/* turbopackIgnore: true */ DATA_ROOT, "..", ".lh-sync");
+
+/**
  * THE AUTH/KEY STORE (auth-keys wave, 2026-09-19): BYOK provider keys in a
  * flat {VAR: value} JSON map — the SAME file the Electron app has always
  * hand-edited (owner decision: option A, zero migration). Desktop main.cjs

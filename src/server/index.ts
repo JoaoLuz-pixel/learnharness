@@ -65,3 +65,6 @@ export { claudeCodeInstallationResponse } from "./claude-code.ts";
 // No import side effects; the boot sync lives in stores.ts.
 export * from "./custom-provider.ts";
 export { customProviderGet, customProviderMutation } from "./custom-provider-http.ts";
+
+// Device Sync (owner, 2026-11-15).
+export { deviceSync } from "./device-sync.ts";

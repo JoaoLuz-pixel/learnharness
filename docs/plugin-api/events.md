@@ -68,6 +68,7 @@ export interface ServerEvents {
         topic: string;
         data?: unknown;
     };
+    "sync-changed": Record<string, never>;
 }
 ```
 
@@ -95,6 +96,7 @@ export interface ServerEvents {
 - ["plugin-message".pluginId](#serverevents-plugin-messagepluginid)
 - ["plugin-message".topic](#serverevents-plugin-messagetopic)
 - ["plugin-message".data](#serverevents-plugin-messagedata)
+- ["sync-changed"](#serverevents-sync-changed)
 
 ### ServerEvents "turn-started"
 
@@ -275,6 +277,15 @@ topic: string;
 
 ```ts
 data?: unknown;
+```
+
+### ServerEvents "sync-changed"
+
+Device Sync status changed (phase, conflicts, devices, remote locks).
+Notify-then-fetch: GET /api/sync.
+
+```ts
+"sync-changed": Record<string, never>;
 ```
 
 ## ServerEventType

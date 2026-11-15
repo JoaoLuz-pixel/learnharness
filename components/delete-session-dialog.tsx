@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { HostDialog } from "@/components/host-dialog";
 import { forgetChatDrafts } from "@/components/draft-store";
+import { SyncDeleteNotice, useSyncDeleteGate, type SyncDeleteGate } from "@/components/sync-delete-notice";
 import type { ChatDeleteMode, ChatListItem } from "@/src/core";
 
 /** The graph-traces checkbox copy (owner, 2026-09-24 flow rework — was
@@ -52,6 +53,7 @@ export function DeleteSessionDialog({
 }) {
 	const [traces, setTraces] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const { gate: syncGate, reset: resetSyncGate } = useSyncDeleteGate();
 	// Retry IS pressing Delete again: the mode always derives from the
 	// checkbox's current state (a toggle between failure and retry is a
 	// change of intent, honored as such — the checkbox is disabled while
@@ -61,6 +63,7 @@ export function DeleteSessionDialog({
 	// Fresh state per session: closing resets, opening a new chat starts clean.
 	useEffect(() => {
 		if (!chat) {
+			resetSyncGate();
 			setTraces(false);
 			setBusy(false);
 			setFailure(null);
@@ -68,7 +71,7 @@ export function DeleteSessionDialog({
 	}, [chat]);
 
 	const run = async () => {
-		if (!chat || busy) return;
+		if (!chat || busy || (syncGate && !syncGate.approved)) return;
 		const mode: ChatDeleteMode = traces ? "delete-nodes" : "preserve-graph";
 		setBusy(true);
 		setFailure(null);
@@ -106,6 +109,7 @@ export function DeleteSessionDialog({
 				onTraces={(next) => setTraces(next)}
 				onClose={onClose}
 				onRun={() => void run()}
+				syncGate={syncGate}
 				renderFrame={(frame) => <HostDialog open frame={frame} onClose={() => {
 					if (busy) return "blocked";
 					onClose(); return "closed";
@@ -124,6 +128,7 @@ export function DeleteSessionBody({
 	onClose,
 	onRun,
 	renderFrame,
+	syncGate,
 }: {
 	chat: Pick<ChatListItem, "id" | "title">;
 	/** The graph-traces checkbox — unchecked by default (preserve-graph). */
@@ -134,6 +139,8 @@ export function DeleteSessionBody({
 	onClose: () => void;
 	onRun: () => void;
 	renderFrame?: (frame: ReactElement<{ children: ReactNode }>) => ReactNode;
+	/** Device Sync on: the extra everywhere-approval gates Delete. */
+	syncGate?: SyncDeleteGate;
 }) {
 	const frame = (
 		<div
@@ -176,6 +183,7 @@ export function DeleteSessionBody({
 					<span className="mt-1 block text-xs text-muted-foreground">{TRACES_COPY.body}</span>
 				</span>
 			</label>
+			{syncGate && <SyncDeleteNotice gate={syncGate} disabled={busy} what="this session" />}
 			{failure && (
 				<div
 					role="alert"
@@ -211,7 +219,7 @@ export function DeleteSessionBody({
 					type="button"
 					data-testid="delete-confirm"
 					onClick={onRun}
-					disabled={busy}
+					disabled={busy || (syncGate !== undefined && !syncGate.approved)}
 					className="rounded-sm border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-40"
 				>
 					{busy ? "Deleting…" : "Delete"}

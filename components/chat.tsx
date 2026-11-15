@@ -7,7 +7,7 @@ import { usePlugins } from "./plugins";
 import { PluginSubmissionRunner, SubmissionModelEpoch, type SubmissionAttempt } from "./plugin-submission-runner";
 import { submissionImages, type BuiltinSubmissionCapture, type PrepareBuiltinSubmission, type PrepareThinkingSubmission, type PreparePluginQuestionSubmission, type PreparePluginProblemSubmission } from "./plugin-submission-adapters";
 import { SubmittedImages } from "./submitted-images";
-import { useStagedImages } from "./staged-images";
+import { useStagedImages, type StagedImages } from "./staged-images";
 import { chatDraftKey, clearOpeningImages, loadDraft, readOpeningImages, scheduleDraftSave, stashOpeningImages } from "./draft-store";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { usePageSurfaceBoundary, SurfaceRegion } from "./plugin-surfaces";
@@ -127,6 +127,7 @@ import {
 } from "@/src/core";
 import { ReadingThinkingField } from "@/components/reading-thinking";
 import { PauseQuestionDialog, pauseConfirmed, rememberPauseConfirmed } from "@/components/pause-question-dialog";
+import { useDeviceSync } from "@/components/use-device-sync";
 import { currentUserThinkingOpen, setAllUserThinkingOpen } from "@/components/thinking-block";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
@@ -656,10 +657,16 @@ export function Chat({
 	const applyReadingThinking = useCallback((v: string) => {
 		readingThinkingRef.current = v;
 	}, []);
+	/* Images in the reading box (owner, 2026-11-15): they belong to the
+	 * current question like its text, ride the answer's readingThinking
+	 * channel or the pause send, and reset when the question changes. */
+	const readingImages = useStagedImages();
+	const { imagesRef: readingImagesRef, setImages: setReadingImages } = readingImages;
 	const clearReadingThinking = useCallback(() => {
 		readingThinkingRef.current = "";
+		setReadingImages([], false);
 		setReadingThinkingSeed((previous) => ({ ...previous, value: "", revision: previous.revision + 1 }));
-	}, []);
+	}, [setReadingImages]);
 	/* THE PAUSE SEND (owner, 2026-11-15): the reading-thinking box posts
 	 * its text NOW — the open question closes with a paused result and the
 	 * teacher replies (one atomic pause-question input). First use asks
@@ -668,30 +675,33 @@ export function Chat({
 	const pauseAndSend = () => {
 		const question = pendingRef.current;
 		const text = readingThinkingRef.current.trim();
-		if (!question || !text || busyRef.current) return;
-		void send({ type: "pause-question", toolCallId: question.toolCallId, text }, () => {
+		const images = readingImagesRef.current.map(image => ({ ...image }));
+		if (!question || (!text && !images.length) || busyRef.current) return;
+		void send({ type: "pause-question", toolCallId: question.toolCallId, text, ...(images.length ? { images } : {}) }, () => {
 			if (readingThinkingRef.current.trim() === text) clearReadingThinking();
 		});
 	};
 	const requestPauseSend = () => {
 		void finishDictation().then(() => {
-			if (!readingThinkingRef.current.trim() || busyRef.current) return;
+			if ((!readingThinkingRef.current.trim() && !readingImagesRef.current.length) || busyRef.current) return;
 			if (pauseConfirmed()) pauseAndSend();
 			else setPauseConfirmOpen(true);
 		});
 	};
 	const pendingQuestionId = pendingPlugin ? pluginQuestionOccurrenceKey(pendingPlugin.occurrence) : pending?.key ?? null;
+	const readingImagesQuestion = useRef<string | null>(null);
 	useLayoutEffect(() => {
 		// Different calls never share a draft; a failed submission of THIS
 		// call restores the reading channel alongside the form's snapshot.
 		const value = pendingPlugin ? pluginQuestionDraft(pendingPlugin).readingThinking : pendingQuestionId ? questionDraft(pendingQuestionId)?.readingThinking ?? "" : "";
 		readingThinkingRef.current = value;
+		if (readingImagesQuestion.current !== pendingQuestionId) { readingImagesQuestion.current = pendingQuestionId; setReadingImages([], false); }
 		setReadingThinkingSeed((previous) =>
 			previous.questionId === pendingQuestionId && previous.value === value
 				? previous
 				: { questionId: pendingQuestionId, value, revision: previous.revision + 1 },
 		);
-	}, [pendingQuestionId, questionDraft, pluginQuestionDraft]);
+	}, [pendingQuestionId, questionDraft, pluginQuestionDraft, setReadingImages]);
 
 	// The phase at every message (one linear fold): the transcript draws a
 	// color-coded dotted divider at each boundary; the header chip reads the
@@ -774,7 +784,7 @@ export function Chat({
 				...(raw.dontKnow !== undefined ? { dontKnow: raw.dontKnow } : {}), ...(raw.values !== undefined ? { values: raw.values } : {}),
 				...(raw.other !== undefined ? { other: raw.other } : {}), ...(raw.text !== undefined ? { text: raw.text } : {}),
 				...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}), images: [],
-			}, thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: requiresReveal ? readingThinkingRef.current : "", images: [] } };
+			}, thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: requiresReveal ? readingThinkingRef.current : "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
 		}, () => {
 			const now = pendingQuestionOf(submissionLive.current.nativeMessages);
 			return isCurrent() && !busyRef.current && now?.messageId === original.messageId && now.contentIndex === original.contentIndex && now.toolCallId === original.toolCallId && now.tool === original.tool;
@@ -840,7 +850,7 @@ export function Chat({
 		const original = pendingPlugin;
 		return runSubmission(target, () => {
 			const raw = capture();
-			return { type: "plugin-question-answer", answer: raw.answer, answerImages: [], thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: raw.readingThinking ?? "", images: [] } };
+			return { type: "plugin-question-answer", answer: raw.answer, answerImages: [], thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: raw.readingThinking ?? "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
 		}, () => isCurrent() && !busyRef.current && pendingPluginQuestionOf(submissionLive.current.nativeMessages)?.questionId === original.questionId, async (prepared, attempt) => {
 			if (prepared.type !== "plugin-question-answer") return false;
 			const images = submissionImages(prepared, target.channels);
@@ -1190,7 +1200,10 @@ export function Chat({
 	// recovers from it. Later compaction requires new input instead.
 	const retryable = !pluginOwnsDock && (status === "ready" || status === "error") && !busy && !compacting && endsInFailedTurn(nativeMessages);
 	const retryFailedTurn = () => retryFailedResponse(send, draftRef);
-	const sendAllowed = !pluginOwnsDock && reconciliation === "ready" && !pending && !activeProblem && !compacting && !submissionRunner.occupied;
+	// DEVICE SYNC (owner, 2026-11-15): mid-turn on another device → read-only here.
+	const { status: syncStatus } = useDeviceSync();
+	const remoteLock = syncStatus?.locks.find((lock) => lock.chatId === chatId) ?? null;
+	const sendAllowed = !pluginOwnsDock && reconciliation === "ready" && !pending && !activeProblem && !compacting && !submissionRunner.occupied && !remoteLock;
 	const pendingTextTarget = textTarget();
 	const pendingTextInput = !!pendingTextTarget && !!pluginManager?.hasPendingSubmissionInput(pendingTextTarget);
 	const pendingThinkingTarget = thinkingTarget();
@@ -2124,9 +2137,10 @@ export function Chat({
 					onPrepareThinking={prepareThinking}
 					pendingThinkingInput={pendingThinkingInput}
 					onPreparePluginQuestion={preparePluginQuestion}
-					preparing={submissionRunner.occupied}
+					preparing={submissionRunner.occupied || !!remoteLock}
 					preparationStatus={<>
 						{preparationError && <p role="alert" className="px-4 py-2 text-sm text-destructive">{preparationError}</p>}
+						{remoteLock && <p role="status" data-testid="remote-session-lock" className="px-4 py-2 text-sm text-muted-foreground">Active on {remoteLock.deviceName}. This session is read-only here until that turn finishes.</p>}
 					</>}
 					pluginQuestion={pendingPlugin}
 					pluginDraft={pendingPlugin ? pluginQuestionDraft(pendingPlugin) : undefined}
@@ -2147,7 +2161,7 @@ export function Chat({
 						snapshot: activeProblem.pluginProblem, occurrence: activeProblemOccurrence, chatId, draft: pluginProblemDraft(activeProblem.pluginProblem),
 						available: pluginProblemAvailability?.problemId === activeProblem.pluginProblem.problemId && pluginProblemAvailability.status === "available",
 						ready: !busy && !compacting && reconciliation === "ready", reconciliation: activeProblemOf(canonicalMessages)?.pluginProblem?.problemId === activeProblem.pluginProblem.problemId ? reconciliation : "syncing",
-						prepareSubmission: preparePluginProblem, send, preparing: submissionRunner.occupied, compactionRunning: compacting, onEscape: dictation.cancel,
+						prepareSubmission: preparePluginProblem, send, preparing: submissionRunner.occupied || !!remoteLock, compactionRunning: compacting, onEscape: dictation.cancel,
 					} : undefined}
 					compactionRunning={compacting}
 					onSubmitThinking={submitThinking}
@@ -2161,6 +2175,7 @@ export function Chat({
 					onReadingThinking={(value) => { applyReadingThinking(value); if (pendingPlugin) pluginQuestionDraft(pendingPlugin).readingThinking = value; }}
 					// Builtin questions only: plugin questions own their own protocol.
 					onSendReadingThinking={pending && !pendingPlugin ? requestPauseSend : undefined}
+					readingImages={readingImages}
 					readingSendDisabled={busy || compacting || submissionRunner.occupied}
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
@@ -2480,6 +2495,7 @@ export function DockOverlay({
 	onReadingThinking,
 	onSendReadingThinking,
 	readingSendDisabled = false,
+	readingImages,
 	phase,
 	turns,
 	contextTokens,
@@ -2543,6 +2559,8 @@ export function DockOverlay({
 	onSendReadingThinking?: () => void;
 	/** A turn, compaction or submission is in flight: the send waits. */
 	readingSendDisabled?: boolean;
+	/** Images staged in the reading box (paste + drop onto the box). */
+	readingImages?: StagedImages;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
 	/** The session's usage log — the stats bar beneath the composer folds it. */
@@ -2971,6 +2989,7 @@ export function DockOverlay({
 							claim={revealPending}
 							onSend={onSendReadingThinking}
 							sendDisabled={readingSendDisabled}
+							images={readingImages}
 						/>
 					)}
 					<div ref={shellRef} data-attachment-composer="" className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">

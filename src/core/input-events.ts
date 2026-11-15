@@ -81,7 +81,7 @@ export type ChatInput =
 	 *  question with a PAUSED result and post the learner's text as a
 	 *  plain message, atomically — one turn, the teacher replies and
 	 *  decides what comes next. Text only. */
-	| { type: "pause-question"; toolCallId: string; text: string };
+	| { type: "pause-question"; toolCallId: string; text: string; images?: ImageContent[] };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -186,14 +186,14 @@ export function dismissAppends(record: { messages: LhMessage[] }, input: Dismiss
  *  by id, built server-side from the call's own question text), then the
  *  learner's message. Refused while any OTHER question would still dangle:
  *  nothing may generate past an unresolved call (the adjacency law). */
-export function pauseQuestionAppends(record: { messages: LhMessage[] }, input: { toolCallId: string; text: string }): LhMessage[] {
+export function pauseQuestionAppends(record: { messages: LhMessage[] }, input: { toolCallId: string; text: string; images?: ImageContent[] }): LhMessage[] {
 	const pending = danglingQuestionOf(record.messages);
 	if (!pending || pending.toolCallId !== input.toolCallId) throw new ChatInputError("pause-question input targets no pending question call");
 	const callInput = pending.input as { question?: unknown } | null;
 	const questionText = typeof callInput?.question === "string" ? callInput.question : "";
 	const result = newAnswerResult(input.toolCallId, pending.tool, pausedAnswer(toolQuestionKind(pending.tool), questionText));
 	if (danglingQuestionOf([...record.messages, result])) throw new ChatInputError("Answer or skip the other open questions before pausing this one");
-	return [result, newUserMessage(input.text)];
+	return [result, newUserMessage(input.text, input.images)];
 }
 
 /** A malformed input event (the honest 400 — the orphan-trap discipline). */
@@ -303,8 +303,9 @@ export function parseChatInput(input: unknown): ChatInput {
 			return { type: "next" };
 		case "pause-question": {
 			if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) throw new ChatInputError("pause-question input requires toolCallId");
-			if (typeof i.text !== "string" || !i.text.trim()) throw new ChatInputError("pause-question input requires non-empty text");
-			return { type: "pause-question", toolCallId: i.toolCallId, text: i.text };
+			const images = parseImages(i.images);
+			if (typeof i.text !== "string" || (!i.text.trim() && !images)) throw new ChatInputError("pause-question input requires non-empty text or images");
+			return { type: "pause-question", toolCallId: i.toolCallId, text: i.text, ...(images ? { images } : {}) };
 		}
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);

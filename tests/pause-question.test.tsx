@@ -88,3 +88,23 @@ describe("pause presentation", () => {
 		assert.match(prompt, /never grade it or treat it as a skip/);
 	});
 });
+
+describe("images in the reading box (owner, 2026-11-15)", () => {
+	const image = { type: "image" as const, data: "iVBORw0KGgo=", mimeType: "image/png" };
+	const staged = (images: typeof image[]) => ({ images, imagesRef: { current: images }, setImages: () => {}, add: async () => {}, remove: () => {}, clearIfUnchanged: () => {}, notice: "", setNotice: () => {}, dismissNotice: () => {} });
+
+	it("a pause may carry images, with or without text, and they ride the learner's message", () => {
+		assert.deepEqual(parseChatInput({ type: "pause-question", toolCallId: "call", text: "", images: [image] }), { type: "pause-question", toolCallId: "call", text: "", images: [image] });
+		assert.throws(() => parseChatInput({ type: "pause-question", toolCallId: "call", text: "", images: [] }));
+		const record = { messages: [pose([{ name: "ask_user_question", id: "call", question: "Q" }])] };
+		const [, message] = pauseQuestionAppends(record, { toolCallId: "call", text: "see this", images: [image] }) as [unknown, { content: unknown }];
+		assert.ok(Array.isArray(message.content) && (message.content as { type: string }[]).some(block => block.type === "image"), "the image is native content of the message");
+	});
+
+	it("the box shows its thumbnails, and images alone enable the send", () => {
+		const html = renderToStaticMarkup(<ReadingThinkingField value="" revision={0} onChange={() => {}} claim={false} onSend={() => {}} images={staged([image])} />);
+		assert.match(html, /data-testid="staged-images"/);
+		assert.doesNotMatch(html, /aria-label="Pause question and send"[^>]*disabled=""/);
+		assert.match(renderToStaticMarkup(<ReadingThinkingField value="" revision={0} onChange={() => {}} claim={false} onSend={() => {}} images={staged([])} />), /aria-label="Pause question and send"[^>]*disabled=""/);
+	});
+});

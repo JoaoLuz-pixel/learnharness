@@ -109,3 +109,7 @@ export * from "./plugin-submissions.ts";
 export type * from "./plugin-ui.ts";
 export type * from "./plugin-tree.ts";
 export * from "./plugin-agents.ts";
+
+// Device Sync (owner, 2026-11-15): the client contract + endpoint setup commands.
+export * from "./device-sync.ts";
+export * from "./endpoint-commands.ts";

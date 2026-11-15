@@ -22,6 +22,8 @@ import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { kbdEventForAction } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
+import { useDeviceSync } from "@/components/use-device-sync";
+import { SyncIndicatorView } from "@/components/sync-indicator";
 import { PluginWidgets } from "@/components/plugins";
 import { PluginSidebarActions } from "@/components/plugin-chrome";
 import { HostContentRootContext, HostRouteLifetimeProvider } from "@/components/host-content-root";
@@ -419,6 +421,7 @@ function SessionsSidebar() {
 	const pathname = usePathname();
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
+	const { status: syncStatus } = useDeviceSync();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
 	   sessionless draft view; the session is created only when the first
@@ -856,7 +859,7 @@ function SessionsSidebar() {
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
-					<div className="px-3 pb-3 pt-1">
+					<div className="flex items-center justify-between px-3 pb-3 pt-1">
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
@@ -868,6 +871,8 @@ function SessionsSidebar() {
 								Settings
 							</button>
 						</Hint>
+						{/* Device Sync (owner, 2026-11-15): status + conflict badge. */}
+						<SyncIndicatorView status={syncStatus} onOpen={() => openSettings("sync")} />
 					</div>
 				</div>
 
