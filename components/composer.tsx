@@ -183,7 +183,8 @@ export function Composer({
 				ref={editorRef}
 				value={value}
 				onValueChange={onChange}
-				onPasteImages={images ? (files) => { void images.add(files); } : undefined}
+				onPasteImages={images ? (files, notice) => { void images.add(files, notice); } : undefined}
+				onPasteNotice={images?.setNotice}
 				defaultDropTarget={defaultDropTarget}
 				fileInsertion={fileInsertion}
 				onKeyDown={(e) => {

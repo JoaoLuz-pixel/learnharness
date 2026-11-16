@@ -12,6 +12,7 @@ import {
 	type ChipHost, type PathEditSnapshot, type TextSelection,
 } from "./path-input-dom";
 import { imageFilesOf } from "./composer-images";
+import { BROWSER_NOTICE, UNRESOLVED_PASTE_NOTICE, pastedFilePaths } from "./pasted-files";
 
 export const INSERT_FILE_PATHS_EVENT = "lh:insert-file-paths";
 /** detail: { link, onInserted?(range) } — insert a citation link at the saved caret. */
@@ -35,7 +36,10 @@ export type PathInputProps = Omit<React.HTMLAttributes<HTMLDivElement>, "childre
 	singleLine?: boolean;
 	/** Opt-in image paste: clipboard image files go here; plain text in the
 	 *  same paste is still inserted as text. Absent → images are ignored. */
-	onPasteImages?: (files: File[]) => void;
+	onPasteImages?: (files: File[], notice?: string) => void;
+	/** Where a pasted-document problem is told (browser: no local paths;
+	 *  desktop: some items had no path). Absent → silent. */
+	onPasteNotice?: (notice: string) => void;
 };
 
 type Controller = {
@@ -48,13 +52,13 @@ type Controller = {
  * views of it. React never reconciles the editable DOM after a native mutation.
  */
 export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(function PathInput({
-	value, onValueChange, placeholder, autoFocus, defaultDropTarget = false, fileInsertion = true, singleLine = false, onPasteImages, className,
+	value, onValueChange, placeholder, autoFocus, defaultDropTarget = false, fileInsertion = true, singleLine = false, onPasteImages, onPasteNotice, className,
 	onKeyDown, onFocus, onBlur, onInput, onPaste, onCopy, onCut,
 	onCompositionStart, onCompositionEnd, ...props
 }, forwardedRef) {
 	const rootRef = React.useRef<HTMLDivElement>(null);
 	const controllerRef = React.useRef<Controller | null>(null);
-	const callbacks = React.useRef({ onValueChange, singleLine, fileInsertion, onPasteImages });
+	const callbacks = React.useRef({ onValueChange, singleLine, fileInsertion, onPasteImages, onPasteNotice });
 	const composing = React.useRef(false);
 	const [chips, setChips] = React.useState<ChipHost[]>([]);
 	// Keep this text child immutable: SSR/hydration gets the complete draft,
@@ -62,7 +66,7 @@ export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(functi
 	const initial = React.useRef({ value: normalizePathInputValue(value, singleLine), autoFocus, singleLine });
 
 	React.useImperativeHandle(forwardedRef, () => rootRef.current!, []);
-	React.useLayoutEffect(() => { callbacks.current = { onValueChange, singleLine, fileInsertion, onPasteImages }; }, [onValueChange, singleLine, fileInsertion, onPasteImages]);
+	React.useLayoutEffect(() => { callbacks.current = { onValueChange, singleLine, fileInsertion, onPasteImages, onPasteNotice }; }, [onValueChange, singleLine, fileInsertion, onPasteImages, onPasteNotice]);
 
 	React.useLayoutEffect(() => {
 		const root = rootRef.current!;
@@ -223,8 +227,19 @@ export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(functi
 			// Opted-in composers stage pasted images; any plain text in the same
 			// paste is still inserted below (owner: both). HTML stays ignored.
 			const images = imageFilesOf(event.clipboardData?.files ?? []);
-			if (images.length && callbacks.current.onPasteImages) callbacks.current.onPasteImages(images);
-			const text = event.clipboardData?.getData("text/plain") ?? "";
+			// Pasted documents become path chips, like the paperclip (owner,
+			// 2026-11-16); Linux file:// copies too. Text still follows.
+			let fromText = false, notice = "";
+			if (callbacks.current.fileInsertion) {
+				const pasted = pastedFilePaths(event.clipboardData, window.lh?.getPathForFile);
+				fromText = pasted.fromText;
+				if (pasted.paths.length) stage(pasted.paths);
+				if (pasted.unresolved) notice = window.lh?.getPathForFile ? UNRESOLVED_PASTE_NOTICE : BROWSER_NOTICE;
+			}
+			if (images.length && callbacks.current.onPasteImages) callbacks.current.onPasteImages(images, notice || undefined);
+			else if (notice) callbacks.current.onPasteNotice?.(notice);
+			// file:// text that became chips is not ALSO pasted as text.
+			const text = fromText ? "" : event.clipboardData?.getData("text/plain") ?? "";
 			// Image/file/HTML-only clipboard contents are not text replacement.
 			if (text === "") return;
 			if (composing.current) pendingPaste.push(text);

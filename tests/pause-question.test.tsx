@@ -101,6 +101,14 @@ describe("images in the reading box (owner, 2026-11-15)", () => {
 		assert.ok(Array.isArray(message.content) && (message.content as { type: string }[]).some(block => block.type === "image"), "the image is native content of the message");
 	});
 
+	it("the box has a paperclip beside send, and keeps it when it cannot send (owner, 2026-11-16)", () => {
+		const withSend = renderToStaticMarkup(<ReadingThinkingField value="" revision={0} onChange={() => {}} claim={false} onSend={() => {}} images={staged([])} />);
+		assert.match(withSend, /data-attachment-composer=""/);
+		assert.match(withSend, /data-testid="attach-files"[\s\S]*data-testid="reading-thinking-send"/, "paperclip comes just before send");
+		assert.match(withSend, /aria-label="Attach files"[^>]*class="[^"]*size-7/, "compact, matching the send button");
+		assert.match(renderToStaticMarkup(<ReadingThinkingField value="" revision={0} onChange={() => {}} claim={false} />), /data-testid="attach-files"/);
+	});
+
 	it("the box shows its thumbnails, and images alone enable the send", () => {
 		const html = renderToStaticMarkup(<ReadingThinkingField value="" revision={0} onChange={() => {}} claim={false} onSend={() => {}} images={staged([image])} />);
 		assert.match(html, /data-testid="staged-images"/);

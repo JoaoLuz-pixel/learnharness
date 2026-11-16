@@ -22,10 +22,12 @@ export function useStagedImages(onChange?: (images: ImageContent[]) => void) {
 		setState(next);
 		if (notify) changed.current?.(next);
 	}, []);
-	const add = useCallback(async (files: File[]) => {
+	/** `alsoNotice`: a notice from the same paste/drop (e.g. a document
+	 *  without a path) — set together so admission never erases it. */
+	const add = useCallback(async (files: File[], alsoNotice = "") => {
 		const admitted = await admitComposerImages(files);
 		if (admitted.images.length) setImages([...imagesRef.current, ...admitted.images]);
-		setNotice(admitted.notice);
+		setNotice([admitted.notice, alsoNotice].filter(Boolean).join(" "));
 	}, [setImages]);
 	const remove = useCallback((index: number) => {
 		setImages(imagesRef.current.filter((_, i) => i !== index));

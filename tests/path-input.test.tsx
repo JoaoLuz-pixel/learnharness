@@ -10,6 +10,7 @@ import {
 	readPathSelection, renderPathInput, replacePathSelection, restorePathSelection,
 } from "../components/path-input-dom.ts";
 import { quoteFilePath } from "../src/core/file-paths.ts";
+import { BROWSER_NOTICE } from "../components/pasted-files.ts";
 import { serializeCitation } from "../src/core/citations.ts";
 
 function editor() {
@@ -151,7 +152,7 @@ afterEach(async () => { await cleanup?.(); cleanup = undefined; });
 
 /** linkedom has no Selection/default editing actions. The shim tests our offset
  * contract, NOT browser caret navigation or the native IME implementation. */
-async function fixture(initial: string, singleLine = false, onPasteImages?: (files: File[]) => void) {
+async function fixture(initial: string, singleLine = false, onPasteImages?: (files: File[], notice?: string) => void, onPasteNotice?: (notice: string) => void) {
 	const { window: win, document: doc } = parseHTML("<html><body><div id='root'></div><button id='elsewhere'></button></body></html>");
 	let active: Element = doc.body;
 	Object.defineProperty(doc, "activeElement", { get: () => active });
@@ -175,7 +176,7 @@ async function fixture(initial: string, singleLine = false, onPasteImages?: (fil
 	const writes: string[] = [];
 	let keys = 0;
 	function draw() {
-		reactRoot.render(<PathInput ref={ref} singleLine={singleLine} value={value} onValueChange={(next) => { writes.push(next); value = next; draw(); }} onKeyDown={() => { keys++; }} onPasteImages={onPasteImages} />);
+		reactRoot.render(<PathInput ref={ref} singleLine={singleLine} value={value} onValueChange={(next) => { writes.push(next); value = next; draw(); }} onKeyDown={() => { keys++; }} onPasteImages={onPasteImages} onPasteNotice={onPasteNotice} />);
 	}
 	await act(async () => { draw(); });
 	cleanup = async () => {
@@ -451,6 +452,59 @@ test("opted-in image paste stages image files and still inserts the plain text (
 	await f.event("paste", { clipboardData: { files: [image], getData: () => "" } });
 	assert.equal(staged.length, 2);
 	assert.equal(f.value, "aXb", "an image-only paste leaves the text alone");
+});
+
+/** The desktop bridge for one test; removed again with the fixture. */
+function desktopBridge(getPathForFile: (file: File) => string) {
+	const win = globalThis.window as unknown as { lh?: unknown };
+	win.lh = { getPathForFile };
+	const previous = cleanup;
+	cleanup = async () => { delete win.lh; await previous?.(); };
+}
+
+test("pasted documents become path chips at the caret on desktop, and text still follows (owner, 2026-11-16)", async () => {
+	const staged: [File[], string | undefined][] = [];
+	const f = await fixture("ab", false, (files, notice) => staged.push([files, notice]));
+	desktopBridge((file) => file.name === "notes.pdf" ? "/docs/notes.pdf" : "");
+	f.select(1);
+	const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+	const paste = await f.event("paste", { clipboardData: { files: [pdf], getData: (type: string) => type === "text/plain" ? "X" : "" } });
+	assert.equal(paste.defaultPrevented, true);
+	assert.equal(f.value, "a `/docs/notes.pdf` Xb");
+	assert.equal(f.root.querySelectorAll(`[${PATH_SOURCE_ATTRIBUTE}]`).length, 1);
+	assert.deepEqual(staged, [], "no images, no image staging");
+});
+
+test("a mixed paste stages images, chips documents and reports pathless items with the images", async () => {
+	const staged: [File[], string | undefined][] = [];
+	const f = await fixture("", false, (files, notice) => staged.push([files, notice]));
+	desktopBridge((file) => file.name === "notes.pdf" ? "/docs/notes.pdf" : "");
+	const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+	const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+	const virtual = new File(["x"], "virtual.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+	await f.event("paste", { clipboardData: { files: [image, pdf, virtual], getData: () => "" } });
+	assert.equal(f.value, "`/docs/notes.pdf`");
+	assert.deepEqual(staged, [[[image], "Some pasted items had no available file path."]]);
+});
+
+test("in a browser a pasted document leaves the text alone and explains why", async () => {
+	const notices: string[] = [];
+	const f = await fixture("ab", false, undefined, (notice) => notices.push(notice));
+	const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+	await f.event("paste", { clipboardData: { files: [pdf], getData: () => "" } });
+	assert.deepEqual(notices, [BROWSER_NOTICE]);
+	assert.equal(f.value, "ab");
+	assert.deepEqual(f.writes, []);
+});
+
+test("Linux file-manager copies (file:// text, no File) become chips instead of text", async () => {
+	const f = await fixture("");
+	desktopBridge(() => "");
+	const clipboardData = { files: [], getData: (type: string) => type === "text/plain" ? "x-special/nautilus-clipboard\ncopy\nfile:///home/me/my%20notes.pdf\n" : "" };
+	await f.event("paste", { clipboardData });
+	assert.equal(f.value, "`/home/me/my notes.pdf`");
+	await f.event("paste", { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "see file:///x" : "" } });
+	assert.equal(f.value, "`/home/me/my notes.pdf`see file:///x", "ordinary text is still pasted as text");
 });
 
 test("without the opt-in, pasted images are ignored exactly as before", async () => {

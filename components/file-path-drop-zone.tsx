@@ -6,13 +6,14 @@ import { directoryReferencePath, quoteFilePath } from "@/src/core";
 import { appendToPrimaryInput } from "@/components/dictation";
 import { INSERT_FILE_PATHS_EVENT } from "@/components/path-input";
 import { imageFilesOf } from "@/components/composer-images";
+import { BROWSER_NOTICE } from "@/components/pasted-files";
 
 export function dropLabel(desktop: boolean, inChat: boolean): string {
 	if (inChat) return desktop ? "Drop to attach images or file paths" : "Drop to attach images";
 	return desktop ? "Drop to attach file paths" : BROWSER_NOTICE;
 }
 
-export const BROWSER_NOTICE = "Local file paths can only be attached in the desktop app. You can paste a full path instead.";
+export { BROWSER_NOTICE };
 
 /* The in-chat image target: an open chat's composer claims it while
  * mounted; dropped image files then go inline there instead of becoming

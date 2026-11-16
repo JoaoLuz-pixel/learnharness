@@ -3,10 +3,12 @@
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { composingQuestionKey, pluginQuestionKeySuppressed } from "./plugin-question-keys";
-import { PathInput } from "@/components/path-input";
+import { INSERT_FILE_PATHS_EVENT, PathInput } from "@/components/path-input";
 import { CornerDownLeftIcon } from "lucide-react";
 import { StagedImageStrip, type StagedImages } from "./staged-images";
 import { imageFilesOf } from "./composer-images";
+import { AttachFilesButton } from "./attach-files-button";
+import { BROWSER_NOTICE, UNRESOLVED_PASTE_NOTICE, pastedFilePaths } from "./pasted-files";
 import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 
@@ -59,6 +61,9 @@ export function ReadingThinkingField({
 	images?: StagedImages;
 }) {
 	const controller = useOptionalInteractionLayers();
+	// The paperclip and drops target this box's editor (the caller's ref if any).
+	const ownInputRef = useRef<HTMLDivElement | null>(null);
+	const editorRef = inputRef ?? ownInputRef;
 	const [draft, setDraft] = useState(value);
 	// Appends may arrive back-to-back before React commits. Like Chat's
 	// submit mirror, this ref includes every edit synchronously.
@@ -78,27 +83,36 @@ export function ReadingThinkingField({
 	return (
 		<div
 			data-testid="reading-thinking-field"
+			/* The paperclip menu opens above this box, not the main bar. */
+			data-attachment-composer=""
 			className="pointer-events-auto mb-2 rounded-2xl border bg-card/60 px-3 py-2 transition-colors focus-within:border-primary/50"
 			/* A drop ON the box stays in the box; the chat-wide drop zone sees
-			   defaultPrevented and only clears its indicator. */
-			onDragOver={images ? (e) => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } } : undefined}
-			onDrop={images ? (e) => {
+			   defaultPrevented and only clears its indicator. Images go to the
+			   strip; documents become path chips here (owner, 2026-11-16). */
+			onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+			onDrop={(e) => {
 				const files = Array.from(e.dataTransfer.files);
-				const picked = imageFilesOf(files);
-				if (!picked.length) return; // not images: the usual drop handling applies
+				if (!files.length) return; // not files: the usual drop handling applies
 				e.preventDefault();
-				void images.add(picked).then(() => { if (picked.length < files.length) images.setNotice("Only images can be added here."); });
-			} : undefined}
+				const resolve = window.lh?.getPathForFile;
+				const documents = pastedFilePaths(e.dataTransfer, resolve);
+				if (documents.paths.length) editorRef.current?.dispatchEvent(new CustomEvent(INSERT_FILE_PATHS_EVENT, { detail: documents.paths }));
+				const notice = documents.unresolved ? (resolve ? UNRESOLVED_PASTE_NOTICE : BROWSER_NOTICE) : "";
+				const picked = images ? imageFilesOf(files) : [];
+				if (images && picked.length) void images.add(picked, notice);
+				else if (notice) images?.setNotice(notice);
+			}}
 		>
 			<div className="pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				Thinking while reading
 			</div>
 			{images && <StagedImageStrip images={images.images} onRemove={images.remove} notice={images.notice} onDismissNotice={images.dismissNotice} />}
 			<PathInput
-				ref={inputRef}
+				ref={editorRef}
 				value={draft}
 				onValueChange={applyDraft}
-				onPasteImages={images ? (files) => { void images.add(files); } : undefined}
+				onPasteImages={images ? (files, notice) => { void images.add(files, notice); } : undefined}
+				onPasteNotice={images?.setNotice}
 				/* py-0.5 (owner round, 2026-10-07): the scrollbar fix. Source
 				   Sans 3's font box is 22px at 16px; lh-input's 1.25 leading
 				   gives a 20px line box — the content area sticks 1px below the
@@ -150,8 +164,10 @@ export function ReadingThinkingField({
 				placeholder="Whatever comes to mind as you read."
 				className="field-sizing-content lh-input max-h-40 w-full resize-none bg-transparent py-0.5 outline-none placeholder:text-muted-foreground/70"
 			/>
-			{onSend && (
-				<div className="flex justify-end pt-1">
+			{/* Paperclip beside send (owner, 2026-11-16); shown without send too. */}
+			<div className="flex items-center justify-end gap-1 pt-1">
+				<AttachFilesButton editorRef={editorRef} compact />
+				{onSend && (
 					<button
 						type="button"
 						data-testid="reading-thinking-send"
@@ -163,8 +179,8 @@ export function ReadingThinkingField({
 					>
 						<CornerDownLeftIcon className="size-3.5" />
 					</button>
-				</div>
-			)}
+				)}
+			</div>
 		</div>
 	);
 }

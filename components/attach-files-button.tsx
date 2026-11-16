@@ -81,7 +81,11 @@ function AttachmentPopup({ anchorRef, rootRef, open, close, children }: {
  * folder choice returns the directory itself, including an empty directory.
  * aria-disabled, not disabled, so the tooltip still shows.
  */
-export function AttachFilesButton({ editorRef }: { editorRef: React.RefObject<HTMLDivElement | null> }) {
+export function AttachFilesButton({ editorRef, compact = false }: {
+	editorRef: React.RefObject<HTMLDivElement | null>;
+	/** The thinking box's smaller button, matching its send button (size-7). */
+	compact?: boolean;
+}) {
 	const controller = useOptionalInteractionLayers();
 	const pickerRef = useRef<HTMLInputElement>(null);
 	const desktop = useDesktopPaths();
@@ -166,9 +170,9 @@ export function AttachFilesButton({ editorRef }: { editorRef: React.RefObject<HT
 					aria-expanded={open}
 					data-testid="attach-files"
 					onClick={() => { if (desktop) { setNotice(""); setOpen(!open); } }}
-					className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground"
+					className={`flex ${compact ? "size-7 rounded-md" : "size-10 rounded-[10px]"} shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground`}
 				>
-					<PaperclipIcon className="size-4" />
+					<PaperclipIcon className={compact ? "size-3.5" : "size-4"} />
 				</button>
 			</Hint>
 			{(open || notice) && <AttachmentPopup anchorRef={buttonRef} rootRef={popupRef} open={open} close={() => setOpen(false)}><div ref={popupRef} role={open ? "menu" : "status"}
