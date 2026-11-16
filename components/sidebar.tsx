@@ -24,6 +24,7 @@ import { kbdEventForAction } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { useDeviceSync } from "@/components/use-device-sync";
 import { SyncIndicatorView } from "@/components/sync-indicator";
+import { KeymapPersistence } from "@/components/keymap-persistence";
 import { PluginWidgets } from "@/components/plugins";
 import { PluginSidebarActions } from "@/components/plugin-chrome";
 import { HostContentRootContext, HostRouteLifetimeProvider } from "@/components/host-content-root";
@@ -968,6 +969,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 				    after the content in the tree, but it's window-level so order only
 				    matters for the events it dispatches, never for DOM priority. */}
 				<KeyboardShortcuts />
+				{/* Shortcut overrides survive restarts (device folder, 2026-11-16). */}
+				<KeymapPersistence />
 				<PluginWidgets />
 			</SettingsDialogProvider></InteractionLayersProvider>
 		</HostContentRootContext.Provider>

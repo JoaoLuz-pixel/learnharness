@@ -1,6 +1,7 @@
 node_modules/
 data/
 .lh-sync/
+.lh-device/
 .next/
 *.log
 .DS_Store

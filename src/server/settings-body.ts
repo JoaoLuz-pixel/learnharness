@@ -83,7 +83,7 @@ function asRecord(body: unknown): Record<string, unknown> | null {
 	return body as Record<string, unknown>;
 }
 
-/** general: { autoUpdate?: boolean } */
+/** general: { autoUpdate?: boolean; confirmPauseQuestion?: boolean } */
 export function parseGeneralSettingsBody(body: unknown): SettingsBodyResult<GeneralSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
@@ -93,6 +93,12 @@ export function parseGeneralSettingsBody(body: unknown): SettingsBodyResult<Gene
 			return { ok: false, error: "autoUpdate must be a boolean" };
 		}
 		settings.autoUpdate = raw.autoUpdate;
+	}
+	if (raw.confirmPauseQuestion !== undefined) {
+		if (typeof raw.confirmPauseQuestion !== "boolean") {
+			return { ok: false, error: "confirmPauseQuestion must be a boolean" };
+		}
+		settings.confirmPauseQuestion = raw.confirmPauseQuestion;
 	}
 	return { ok: true, settings };
 }

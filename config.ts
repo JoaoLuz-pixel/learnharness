@@ -146,6 +146,15 @@ export const THEMES_DIR = path.join(/* turbopackIgnore: true */ DATA_ROOT, "them
  * snapshots. Deliberately OUTSIDE the data dir so sync state never syncs.
  * Desktop: userData/sync (LH_SYNC_DIR); dev: a sibling of data/.
  */
+/**
+ * DEVICE-ONLY state (owner, 2026-11-16): unsent drafts and the keyboard
+ * map. Browser storage cannot hold them — the desktop server's port (so the
+ * page's origin) changes every launch. Outside the data dir: never synced.
+ */
+export const DEVICE_DIR = process.env.LH_DEVICE_DIR
+	? path.resolve(/* turbopackIgnore: true */ process.env.LH_DEVICE_DIR)
+	: path.join(/* turbopackIgnore: true */ DATA_ROOT, "..", ".lh-device");
+
 export const SYNC_DIR = process.env.LH_SYNC_DIR
 	? path.resolve(/* turbopackIgnore: true */ process.env.LH_SYNC_DIR)
 	: path.join(/* turbopackIgnore: true */ DATA_ROOT, "..", ".lh-sync");

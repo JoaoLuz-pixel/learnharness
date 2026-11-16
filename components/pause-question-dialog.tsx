@@ -8,7 +8,8 @@ import { useBackdropDismiss } from "@/components/backdrop-dismiss";
  * The first-time pause confirmation (owner, 2026-11-15): sending from the
  * "Thinking while reading" box PAUSES the open question — it closes
  * unanswered and the teacher replies to the message instead. Shown until
- * the learner ticks "Don't ask again" (remembered on this device only).
+ * the learner ticks "Don't ask again" (settings.json; Settings → General
+ * turns it back on).
  */
 export const PAUSE_CONFIRMED_KEY = "lh.pauseQuestion.confirmed";
 
@@ -19,12 +20,39 @@ export const PAUSE_COPY = {
 	action: "Pause and send",
 };
 
-/** Storage can throw or be empty (private windows, blocked site data). */
-export function pauseConfirmed(): boolean {
+/** The legacy browser flag (before 2026-11-16). It was lost on every app
+ *  restart because the desktop page's origin (its port) changes per launch. */
+function legacyConfirmed(): boolean {
 	try { return globalThis.localStorage?.getItem(PAUSE_CONFIRMED_KEY) === "true"; } catch { return false; }
 }
-export function rememberPauseConfirmed(): void {
-	try { globalThis.localStorage?.setItem(PAUSE_CONFIRMED_KEY, "true"); } catch { /* asked again next time */ }
+
+/** "Don't ask again" lives in settings.json (general.confirmPauseQuestion,
+ *  owner 2026-11-16): durable across restarts, and synced with settings. */
+async function generalSettings(): Promise<Record<string, unknown> | null> {
+	try {
+		const res = await fetch("/api/settings", { cache: "no-store" });
+		if (!res.ok) return null;
+		const body = await res.json() as { settings?: { general?: Record<string, unknown> } };
+		return body.settings?.general ?? {};
+	} catch { return null; }
+}
+
+/** True = skip the confirmation. A legacy browser flag is migrated once. */
+export async function pauseConfirmed(): Promise<boolean> {
+	const general = await generalSettings();
+	if (general?.confirmPauseQuestion === false) return true;
+	if (general && legacyConfirmed()) { await rememberPauseConfirmed(general); return true; }
+	return false;
+}
+
+/** Turn the confirmation off for good (replace-whole section write). */
+export async function rememberPauseConfirmed(current?: Record<string, unknown>): Promise<void> {
+	const general = current ?? await generalSettings();
+	if (!general) return;
+	try {
+		await fetch("/api/settings/general", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...general, confirmPauseQuestion: false }) });
+		try { globalThis.localStorage?.removeItem(PAUSE_CONFIRMED_KEY); } catch { /* best effort */ }
+	} catch { /* asked again next time */ }
 }
 
 export function PauseQuestionBody({ onClose, onConfirm, renderFrame }: {

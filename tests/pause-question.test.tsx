@@ -74,12 +74,12 @@ describe("pause presentation", () => {
 		assert.match(field({ onSend: () => {}, value: "a thought", sendDisabled: true }), /aria-label="Pause question and send"[^>]*disabled=""/, "busy → disabled");
 	});
 
-	it("the first-time confirmation explains the pause and offers don't-ask-again", () => {
+	it("the first-time confirmation explains the pause and offers don't-ask-again", async () => {
 		const html = renderToStaticMarkup(<PauseQuestionBody onClose={() => {}} onConfirm={() => {}} />);
 		assert.ok(html.includes(PAUSE_COPY.title));
 		assert.match(html, /data-testid="pause-question-remember"/);
 		assert.match(html, /Pause and send/);
-		assert.equal(pauseConfirmed(), false, "no storage → ask");
+		assert.equal(await pauseConfirmed(), false, "settings unreachable → ask");
 	});
 
 	it("the teacher prompt carries the approved paused-questions section", () => {

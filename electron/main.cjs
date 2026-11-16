@@ -232,6 +232,9 @@ function startServer(port) {
 					// Device Sync's private state (key, bases, backups): beside the
 					// data dir, never inside it — sync state must not sync itself.
 					LH_SYNC_DIR: path.join(app.getPath("userData"), "sync"),
+					// Device-only drafts + keyboard map (the page origin changes per
+					// launch, so browser storage cannot keep them).
+					LH_DEVICE_DIR: path.join(app.getPath("userData"), "device"),
 					// The auth/keys store — the child reads AND writes this file itself
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).

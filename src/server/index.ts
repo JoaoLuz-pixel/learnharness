@@ -68,3 +68,6 @@ export { customProviderGet, customProviderMutation } from "./custom-provider-htt
 
 // Device Sync (owner, 2026-11-15).
 export { deviceSync } from "./device-sync.ts";
+
+// Device-only documents: drafts + keyboard map (owner, 2026-11-16).
+export { readDeviceDocument, writeDeviceDocument, deleteDeviceDocument, deviceDocumentPath, MAX_DEVICE_DOCUMENT_BYTES } from "./device-local.ts";

@@ -53,6 +53,7 @@ const nextConfig: NextConfig = {
 		"*": [
 			"**/data/**/*",
 			"**/.lh-sync/**/*",
+			"**/.lh-device/**/*",
 			"auth.json",
 			"chatgpt-credentials.json*",
 			"github-copilot-credentials.json*",

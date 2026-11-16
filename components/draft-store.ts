@@ -3,9 +3,9 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 /**
  * Unsent composer drafts (text + staged images) that survive a reload, and
  * the opening-image handover from a start screen to its new chat. Local to
- * this browser/app profile (IndexedDB); nothing here reaches the model until
- * the learner sends. Every operation degrades to "nothing stored": a blocked,
- * missing or failing IndexedDB never breaks the composer.
+ * this device (its device-only folder); nothing here reaches the model until
+ * the learner sends. Every operation degrades to "nothing stored": an
+ * unreachable or failing store never breaks the composer.
  *
  * Keys: `chat:<id>`, `new:<mode>`, `home:<mode>`, `opening:<id>`.
  */
@@ -14,35 +14,13 @@ export interface ComposerDraft {
 	images: ImageContent[];
 }
 
-const DB_NAME = "lh-composer-drafts";
-const STORE = "drafts";
-
-let opening: Promise<IDBDatabase | null> | null = null;
-function database(): Promise<IDBDatabase | null> {
-	if (opening) return opening;
-	opening = new Promise<IDBDatabase | null>((resolve) => {
-		try {
-			const factory = globalThis.indexedDB;
-			if (!factory) { resolve(null); return; }
-			const request = factory.open(DB_NAME, 1);
-			request.onupgradeneeded = () => { request.result.createObjectStore(STORE); };
-			request.onsuccess = () => resolve(request.result);
-			request.onerror = () => resolve(null);
-			request.onblocked = () => resolve(null);
-		} catch { resolve(null); }
-	}).then((db) => { if (!db) opening = null; return db; });
-	return opening;
-}
-
-function run<T>(mode: IDBTransactionMode, act: (store: IDBObjectStore) => IDBRequest<T>): Promise<T | undefined> {
-	return database().then((db) => new Promise<T | undefined>((resolve) => {
-		if (!db) { resolve(undefined); return; }
-		try {
-			const request = act(db.transaction(STORE, mode).objectStore(STORE));
-			request.onsuccess = () => resolve(request.result);
-			request.onerror = () => resolve(undefined);
-		} catch { resolve(undefined); }
-	}), () => undefined);
+/* Stored in the app's device-only folder through /api/device/<key>
+ * (owner, 2026-11-16). Browser storage cannot keep them: the desktop
+ * page's origin (its port) changes every launch. */
+const MAX_DRAFT_BYTES = 25 * 1024 * 1024; // the store's limit, under the API body cap
+const url = (key: string) => `/api/device/${encodeURIComponent(key)}`;
+async function request(key: string, init?: RequestInit): Promise<Response | null> {
+	try { return await fetch(url(key), { cache: "no-store", ...init }); } catch { return null; }
 }
 
 /** Structural check on read: stored data is treated as untrusted. */
@@ -57,18 +35,23 @@ export function parseComposerDraft(value: unknown): ComposerDraft | undefined {
 }
 
 export async function loadDraft(key: string): Promise<ComposerDraft | undefined> {
-	return parseComposerDraft(await run("readonly", store => store.get(key)));
+	const res = await request(key);
+	if (!res || res.status !== 200) return undefined;
+	try { return parseComposerDraft(await res.json()); } catch { return undefined; }
 }
 
 /** An empty draft is a deletion, so sent/cleared drafts leave nothing behind. */
 export async function saveDraft(key: string, draft: ComposerDraft): Promise<void> {
 	if (!draft.text.trim() && draft.images.length === 0) { await deleteDraft(key); return; }
 	const value: ComposerDraft = { text: draft.text, images: draft.images.map(({ type, data, mimeType }) => ({ type, data, mimeType })) };
-	await run("readwrite", store => store.put(value, key));
+	const body = JSON.stringify(value);
+	// Too large to keep: never let an OLDER saved copy come back instead.
+	if (body.length > MAX_DRAFT_BYTES) { await deleteDraft(key); return; }
+	await request(key, { method: "PUT", headers: { "Content-Type": "application/json" }, body });
 }
 
 export async function deleteDraft(key: string): Promise<void> {
-	await run("readwrite", store => store.delete(key));
+	await request(key, { method: "DELETE" });
 }
 
 const pendingSaves = new Map<string, { timer: ReturnType<typeof setTimeout>; draft: ComposerDraft }>();
@@ -89,8 +72,8 @@ export function discardDraft(key: string): Promise<void> {
 export const chatDraftKey = (chatId: string) => `chat:${chatId}`;
 export const startDraftKey = (surface: "new" | "home", mode: "teach" | "practice") => `${surface}:${mode}`;
 
-/* The opening-image handover: memory first (same-tab router.push), with an
- * IndexedDB copy so a reload mid-handover still has the images. */
+/* The opening-image handover: memory first (same-tab router.push), with a
+ * device-folder copy so a reload or restart mid-handover still has them. */
 const openingImages = new Map<string, ImageContent[]>();
 const openingKey = (chatId: string) => `opening:${chatId}`;
 

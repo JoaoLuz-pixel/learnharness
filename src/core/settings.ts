@@ -340,6 +340,9 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 export interface GeneralSettings {
 	/** Automatic startup/24h update checks (default ON). Manual checks bypass this. */
 	autoUpdate?: boolean;
+	/** Ask before the reading box's send pauses a question (default ON).
+	 *  "Don't ask again" turns it off for good (owner, 2026-11-16). */
+	confirmPauseQuestion?: boolean;
 }
 
 /** One app-wide dictation preference, shared by every composer. */
@@ -538,7 +541,7 @@ export interface FactorySettings {
 export const FACTORY_SETTINGS: FactorySettings = {
 	version: CURRENT_SETTINGS_VERSION,
 	agent: { workerRequestConcurrency: 8 },
-	general: { autoUpdate: true },
+	general: { autoUpdate: true, confirmPauseQuestion: true },
 	dictation: { language: "en" },
 	appearance: {
 		theme: "default",
@@ -586,6 +589,8 @@ function sanitizeGeneral(raw: Record<string, unknown>): GeneralSettings {
 	const out: GeneralSettings = {};
 	const autoUpdate = boolOrDrop(raw.autoUpdate);
 	if (autoUpdate !== undefined) out.autoUpdate = autoUpdate;
+	const confirmPauseQuestion = boolOrDrop(raw.confirmPauseQuestion);
+	if (confirmPauseQuestion !== undefined) out.confirmPauseQuestion = confirmPauseQuestion;
 	return out;
 }
 

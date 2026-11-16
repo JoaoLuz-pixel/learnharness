@@ -197,6 +197,7 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 	return {
 		general: {
 			autoUpdate: record?.general?.autoUpdate ?? FACTORY_SETTINGS.general.autoUpdate,
+			confirmPauseQuestion: record?.general?.confirmPauseQuestion ?? FACTORY_SETTINGS.general.confirmPauseQuestion,
 		},
 		dictation: {
 			language: record?.dictation?.language ?? FACTORY_SETTINGS.dictation.language,

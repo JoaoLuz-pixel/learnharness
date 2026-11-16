@@ -45,7 +45,7 @@ import {
 	type UserSettings,
 } from "@/src/core";
 import { useAppearance } from "./appearance.tsx";
-import { SettingsSection } from "./controls.tsx";
+import { SettingsRow, SettingsSection, Toggle } from "./controls.tsx";
 import { UpdateSettings } from "./update-settings.tsx";
 import { AgentSection } from "./agent-section.tsx";
 import type { ModelsSettings } from "@/src/core";
@@ -456,6 +456,10 @@ export function SettingsDialogBody({
 											void write("general", { ...record.general, autoUpdate: on })
 										}
 									/>
+									<SettingsRow label="Ask before pausing a question" hint="Confirm before “Pause question and send” closes the open question" testid="confirm-pause-question">
+										<Toggle label="Ask before pausing a question" checked={record.general?.confirmPauseQuestion ?? true}
+											onChange={(on) => void write("general", { ...record.general, confirmPauseQuestion: on })} />
+									</SettingsRow>
 								</SettingsSection>
 							)}
 							{active === "keys" && (

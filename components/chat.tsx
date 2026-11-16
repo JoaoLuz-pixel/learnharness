@@ -684,8 +684,7 @@ export function Chat({
 	const requestPauseSend = () => {
 		void finishDictation().then(() => {
 			if ((!readingThinkingRef.current.trim() && !readingImagesRef.current.length) || busyRef.current) return;
-			if (pauseConfirmed()) pauseAndSend();
-			else setPauseConfirmOpen(true);
+			void pauseConfirmed().then((skip) => { if (skip) pauseAndSend(); else setPauseConfirmOpen(true); });
 		});
 	};
 	const pendingQuestionId = pendingPlugin ? pluginQuestionOccurrenceKey(pendingPlugin.occurrence) : pending?.key ?? null;
@@ -2322,7 +2321,7 @@ export function Chat({
 				</SurfaceRegion>
 				<AbortTurnDialog mode={abortAsk} onClose={closeAbortAsk} onConfirm={confirmAbort} busy={busy} />
 				<PauseQuestionDialog open={pauseConfirmOpen} onClose={() => setPauseConfirmOpen(false)}
-					onConfirm={(remember) => { if (remember) rememberPauseConfirmed(); setPauseConfirmOpen(false); pauseAndSend(); }} />
+					onConfirm={(remember) => { if (remember) void rememberPauseConfirmed(); setPauseConfirmOpen(false); pauseAndSend(); }} />
 				</div>
 			</div>
 		</div>
