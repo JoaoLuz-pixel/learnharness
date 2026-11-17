@@ -4,9 +4,19 @@ import { MAX_IMPORT_BODY_BYTES } from "./lib/notes-import-limits.ts";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string; homepage: string };
 
+/** The GitHub repo this build updates from (electron-builder.yml's publish
+ *  target): its release notes match the installed version. package.json's
+ *  homepage stays the original project (credit/attribution); in the original
+ *  repo both are the same. Falls back to the homepage if not found. */
+export function releasesRepoUrl(builderYml: string, fallback: string): string {
+	const match = /provider:\s*github\s*\n\s*owner:\s*([\w.-]+)\s*\n\s*repo:\s*([\w.-]+)/.exec(builderYml);
+	return match ? `https://github.com/${match[1]}/${match[2]}` : fallback;
+}
+const releasesRepo = releasesRepoUrl(readFileSync(new URL("./electron-builder.yml", import.meta.url), "utf8"), pkg.homepage);
+
 const nextConfig: NextConfig = {
 	// Public build metadata only; no new runtime Electron version API.
-	env: { LH_VERSION: pkg.version, LH_HOMEPAGE: pkg.homepage },
+	env: { LH_VERSION: pkg.version, LH_HOMEPAGE: pkg.homepage, LH_RELEASES_REPO: releasesRepo },
 	// Leave multipart headroom above the 25 MiB file allowance. This is a
 	// proxy buffer, not a rejection gate: the import route also bounds reads,
 	// validates actual file bytes and handles incomplete multipart bodies.

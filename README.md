@@ -15,7 +15,7 @@
   <a href="https://github.com/amosblomqvist/learnharness">Original project</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/README.md">Documentation</a> ·
-  <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a> ·
+  <a href="https://github.com/JoaoLuz-pixel/learnharness/issues">Issues (fork)</a> ·
   <a href="https://discord.gg/5tCHHQEB2e">Discord</a>
 </p>
 
@@ -90,7 +90,7 @@ See the [documentation index](docs/README.md) for all guides, [development](docs
 
 For trusted local plugins, start with the [authoring guide and capability map](docs/plugin-authoring.md). It links the question, practice-problem, submission, view-context and UI contracts. Use [`examples/plugins/`](examples/plugins/) for small runnable templates, [`plugins/`](plugins/) for feature source projects, and the [host architecture](docs/plugin-architecture.md) for internals.
 
-Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
+Questions, bug reports, and feature requests about this fork's builds: [this fork's Issues](https://github.com/JoaoLuz-pixel/learnharness/issues). For the official app from [learnharness.ai](https://learnharness.ai), use the [original project's Issues](https://github.com/amosblomqvist/learnharness/issues).
 
 Security vulnerabilities: report privately as described in [SECURITY.md](SECURITY.md), not in public issues.
 

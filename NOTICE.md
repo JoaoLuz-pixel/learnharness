@@ -28,6 +28,7 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-17 | [`03c49a7`](https://github.com/JoaoLuz-pixel/learnharness/commit/03c49a7) | Long sessions open recent-first and fill in the older history in the background; launch warm-up request. |
 | 2026-11-17 | [`cd9a957`](https://github.com/JoaoLuz-pixel/learnharness/commit/cd9a957) | Native Windows ARM64 installer in builds and releases, with one merged Windows update feed. |
 | 2026-11-17 | (release setup) | Fork release setup: the fork's builds update from the fork's releases; unsigned macOS packaging for forks; release notes with this notice; the fork's download page (`site/`); this `NOTICE.md`; README fork notice. Version 0.6.4. |
+| 2026-11-18 | (release fixes) | The app's "Release notes" link (Settings → Version) opens this fork's releases, the repo the build updates from; README bug-report links point to this fork's Issues, with the original project's Issues kept for the official app. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 

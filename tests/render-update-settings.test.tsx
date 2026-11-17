@@ -14,7 +14,7 @@ import { parseHTML } from "linkedom";
 import { UpdateSettings, updateStatusText, MANUAL_UPDATE_HINT, AUTO_UPDATE_HINT, type UpdateState } from "../components/settings/update-settings.tsx";
 import UpdateBanner from "../components/update-banner.tsx";
 import { SettingsDialogBody, SettingsDialogProvider } from "../components/settings/settings-dialog.tsx";
-import nextConfig from "../next.config.ts";
+import nextConfig, { releasesRepoUrl } from "../next.config.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element,
@@ -80,7 +80,15 @@ afterEach(async () => {
 describe("version and contextual copy", () => {
 	it("build metadata comes from package.json and exposes only public version/homepage values", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-		assert.deepEqual(nextConfig.env, { LH_VERSION: pkg.version, LH_HOMEPAGE: pkg.homepage });
+		const builder = readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
+		assert.deepEqual(nextConfig.env, { LH_VERSION: pkg.version, LH_HOMEPAGE: pkg.homepage, LH_RELEASES_REPO: releasesRepoUrl(builder, pkg.homepage) });
+	});
+
+	it("release notes come from the repo this build updates from; the homepage stays the credited original", () => {
+		const builder = readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
+		assert.equal(releasesRepoUrl(builder, "x"), "https://github.com/JoaoLuz-pixel/learnharness", "the fork's builds read the fork's release notes");
+		assert.equal(releasesRepoUrl("publish:\n  - provider: github\n    owner: amosblomqvist\n    repo: learnharness\n", "x"), "https://github.com/amosblomqvist/learnharness");
+		assert.equal(releasesRepoUrl("publish: []\n", "https://fallback.example"), "https://fallback.example");
 	});
 
 	it("never claims live/latest information and keeps updater errors generic", () => {

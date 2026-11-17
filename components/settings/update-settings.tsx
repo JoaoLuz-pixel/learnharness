@@ -13,7 +13,9 @@ export type UpdateState = {
 };
 
 export const APP_VERSION = process.env.LH_VERSION ?? "";
-const HOMEPAGE = process.env.LH_HOMEPAGE ?? "";
+// Release notes live where this build updates from (next.config.ts), which
+// for a fork differs from the credited homepage.
+const HOMEPAGE = process.env.LH_RELEASES_REPO || process.env.LH_HOMEPAGE || "";
 export const MANUAL_UPDATE_HINT = "Checking downloads available updates. Downloaded updates install when you quit the app.";
 export const AUTO_UPDATE_HINT = "Check at startup and every 24 hours. Turning this off does not stop updates already in progress or ready to install.";
 const UPDATE_ERROR = "Couldn’t check for updates. Try again later.";
