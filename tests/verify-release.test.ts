@@ -3,8 +3,9 @@
  * plus CLI end-to-end runs, all offline against fixtures. The expected asset
  * names asserted here are the ones verified against the INSTALLED
  * app-builder-lib 26.15.3 (see the script header for the derivation):
- * 11 assets — 4 installers (dmg / NSIS exe / AppImage / deb), the mac
- * updater ZIP, its/exe/dmg blockmaps, and the three latest*.yml feeds.
+ * 13 assets — 5 installers (dmg / NSIS exe x64 + arm64 / AppImage / deb),
+ * the mac updater ZIP, the zip/dmg/exe blockmaps, and the three latest*.yml
+ * feeds (latest.yml lists both Windows installers, x64 first).
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -34,7 +35,7 @@ function asset(id: number, name: string, overrides: Partial<ReleaseAsset> = {}):
 	return { id, name, size: 5000, state: "uploaded", ...overrides };
 }
 
-/** The complete, healthy 11-asset draft for a version. */
+/** The complete, healthy 13-asset draft for a version. */
 function healthyRelease(version: string, tagForm: "v" | "bare" = "v"): ReleaseRecord {
 	const e = expectedAssets(version);
 	return {
@@ -64,16 +65,18 @@ function healthyFeeds(version: string, release: ReleaseRecord): Record<string, s
 }
 
 describe("release gate — expected asset inventory", () => {
-	it("is exactly the 11 verified builder outputs for the version", () => {
+	it("is exactly the 13 verified builder outputs for the version", () => {
 		assert.deepEqual(expectedAssets(VERSION).files, [
 			"LearnHarness-0.2.0-arm64.dmg",
 			"LearnHarness-0.2.0-arm64-mac.zip",
 			"LearnHarness-0.2.0-x64-setup.exe",
+			"LearnHarness-0.2.0-arm64-setup.exe",
 			"LearnHarness-0.2.0-x86_64.AppImage",
 			"LearnHarness-0.2.0-amd64.deb",
 			"LearnHarness-0.2.0-arm64.dmg.blockmap",
 			"LearnHarness-0.2.0-arm64-mac.zip.blockmap",
 			"LearnHarness-0.2.0-x64-setup.exe.blockmap",
+			"LearnHarness-0.2.0-arm64-setup.exe.blockmap",
 			"latest-mac.yml",
 			"latest.yml",
 			"latest-linux.yml",
@@ -165,6 +168,7 @@ describe("release gate — packaging-config drift guard", () => {
 		["productName", (config) => { config.productName = "learnharness"; }],
 		["mac targets", (config) => { (config.mac as Record<string, unknown>).target = [{ target: "dmg", arch: ["arm64"] }]; }],
 		["win target", (config) => { (config.win as Record<string, unknown>).target = [{ target: "appx", arch: ["x64"] }]; }],
+		["win target listing both archs", (config) => { (config.win as Record<string, unknown>).target = [{ target: "nsis", arch: ["x64", "arm64"] }]; }],
 		["linux targets", (config) => { (config.linux as Record<string, unknown>).target = [{ target: "AppImage", arch: ["x64"] }]; }],
 		["publish provider", (config) => { config.publish = [{ provider: "github", releaseType: "prerelease" }]; }],
 		["package name", () => { /* pkg checked below */ }],
@@ -244,6 +248,16 @@ describe("release gate — update feeds", () => {
 
 	type Mutation = (feeds: Record<string, string>, release: ReleaseRecord) => void;
 	const mutations: Array<[string, Mutation, RegExp]> = [
+		["Windows feed without the arm64 installer", (feeds) => {
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace(/  - url: LearnHarness-0\.2\.0-arm64-setup\.exe\n(?: {4}.*\n){2}/, "");
+		}, /latest\.yml: references \[LearnHarness-0\.2\.0-x64-setup\.exe\] but must reference exactly/],
+		["Windows feed listing arm64 first", (feeds) => {
+			const entry = (name: string) => new RegExp(`  - url: ${name.replace(/\./g, "\\.")}\\n(?: {4}.*\\n){2}`);
+			const text = feeds["latest.yml"]!;
+			const x64 = entry("LearnHarness-0.2.0-x64-setup.exe").exec(text)![0];
+			const arm64 = entry("LearnHarness-0.2.0-arm64-setup.exe").exec(text)![0];
+			feeds["latest.yml"] = text.replace(x64 + arm64, arm64 + x64);
+		}, /latest\.yml: files\[0\] must be "LearnHarness-0\.2\.0-x64-setup\.exe"/],
 		["wrong version in latest.yml", (feeds) => { feeds["latest.yml"] = feeds["latest.yml"]!.replace(`version: ${VERSION}`, "version: 0.3.0"); }, /latest\.yml: version is "0\.3\.0"/],
 		["path traversal in a reference", (feeds, release) => {
 			const e = expectedAssets(VERSION);
@@ -314,11 +328,39 @@ describe("release gate — workflow wiring", () => {
 
 	it("can see drafts after ALL packaging jobs, only on real tag pushes", () => {
 		assert.ok(verify);
-		assert.equal(verify.needs, "package");
+		assert.deepEqual(verify.needs, ["package", "merge-win-feed"], "verify runs after the merged Windows feed is in place");
 		assert.equal(verify.if, "github.event_name == 'push'");
 		// GitHub's release-list API hides drafts from read-only tokens.
 		assert.deepEqual(verify.permissions, { contents: "write" });
 		assert.equal(verify.env?.GH_TOKEN, undefined);
+	});
+
+	it("packages Windows ARM64 natively on its own runner, without publishing a competing latest.yml", () => {
+		const rows = workflow.jobs.package.strategy.matrix.include as Array<Record<string, string>>;
+		const arm64 = rows.find((row) => row.platform === "windows-arm64");
+		assert.deepEqual(arm64, { os: "windows-11-arm", platform: "windows-arm64", builder_args: "--win nsis:arm64", win_unpacked: "win-arm64-unpacked" });
+		assert.equal(rows.find((row) => row.platform === "windows-x64")?.win_unpacked, "win-unpacked");
+		const steps = workflow.jobs.package.steps as Array<Record<string, any>>;
+		const publishing = steps.filter((step) => /--publish always/.test(step.run ?? ""));
+		for (const step of publishing) assert.match(step.if, /windows-arm64'|runner\.os == 'macOS'/, `${step.name} must exclude or not reach windows-arm64`);
+		const winLinux = steps.find((step) => step.name === "Windows/Linux release → draft");
+		assert.match(winLinux?.if, /matrix\.platform != 'windows-arm64'/);
+		const arm64Package = steps.find((step) => step.name === "Windows ARM64 package (feed merged later)");
+		assert.match(arm64Package?.run, /--publish never/);
+		assert.match(arm64Package?.if, /matrix\.platform == 'windows-arm64'/);
+	});
+
+	it("merges the Windows feed after packaging, before the gate, on tag pushes only", () => {
+		const merge = workflow.jobs["merge-win-feed"];
+		assert.ok(merge);
+		assert.equal(merge.needs, "package");
+		assert.equal(merge.if, "github.event_name == 'push'");
+		assert.deepEqual(merge.permissions, { contents: "write" });
+		const download = merge.steps.find((step: any) => String(step.uses ?? "").startsWith("actions/download-artifact@"));
+		assert.equal(download?.with?.name, "learnharness-windows-arm64");
+		const run = merge.steps.map((step: any) => step.run ?? "").join("\n");
+		assert.match(run, /scripts\/merge-win-feed\.ts/);
+		assert.match(run, /assets\?name=latest\.yml/);
 	});
 
 	it("exposes the elevated token only to the two API-reading steps", () => {
@@ -408,7 +450,7 @@ describe("release gate — CLI (offline, repo config)", () => {
 		try {
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", TAG]);
 			assert.equal(result.status, 0, String(result.stderr));
-			assert.match(result.stdout, /11\/11 expected files present/);
+			assert.match(result.stdout, /13\/13 expected files present/);
 			assert.ok(result.stdout.includes(`OK: draft for ${TAG} is complete`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });

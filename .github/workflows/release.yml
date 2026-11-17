@@ -99,6 +99,14 @@ jobs:
           - os: windows-2025
             platform: windows-x64
             builder_args: --win --x64
+            win_unpacked: win-unpacked
+          # Native Windows ARM64 (2026-11-17), built on GitHub's ARM64 runner:
+          # native modules come from the build machine, so no cross-build.
+          - os: windows-11-arm
+            platform: windows-arm64
+            # target:arch form: the config default is x64 only (see electron-builder.yml).
+            builder_args: --win nsis:arm64
+            win_unpacked: win-arm64-unpacked
           - os: ubuntu-24.04
             platform: linux-x64
             builder_args: --linux --x64
@@ -161,10 +169,41 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder ${{ matrix.builder_args }} --publish always -c.forceCodeSigning=true
       - name: Windows/Linux release → draft
-        if: github.event_name == 'push' && runner.os != 'macOS'
+        if: github.event_name == 'push' && runner.os != 'macOS' && matrix.platform != 'windows-arm64'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder ${{ matrix.builder_args }} --publish always
+      # Windows ARM64 uploads only its installer + blockmap: publishing its
+      # own latest.yml would overwrite the x64 one. The merge-win-feed job
+      # combines both feeds once every package job is done.
+      - name: Windows ARM64 package (feed merged later)
+        if: github.event_name == 'push' && matrix.platform == 'windows-arm64'
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+      - name: Windows ARM64 installer → draft
+        if: github.event_name == 'push' && matrix.platform == 'windows-arm64'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const {owner, repo} = context.repo;
+            const tag = context.ref.replace(/^refs\/tags\//, "");
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
+            const drafts = releases.filter(r => (r.tag_name === tag || r.tag_name === tag.slice(1)) && r.draft);
+            if (drafts.length !== 1) throw new Error(`Expected exactly one draft for ${tag}, found ${drafts.length}`);
+            const release = drafts[0];
+            const names = fs.readdirSync("dist").filter(n => /-arm64-setup\.exe(\.blockmap)?$/.test(n));
+            if (names.length !== 2) throw new Error(`Expected the arm64 installer and its blockmap, found: ${names.join(", ")}`);
+            for (const name of names) {
+              const existing = release.assets.find(a => a.name === name);
+              if (existing) await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: existing.id});
+              const data = fs.readFileSync(path.join("dist", name));
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name, data,
+                headers: {"content-type": "application/octet-stream", "content-length": data.length},
+              });
+              core.info(`Uploaded ${name} (${data.length} bytes)`);
+            }
       - name: Unsigned macOS rehearsal (no publish, no notarization)
         if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
         env:
@@ -182,8 +221,8 @@ jobs:
               runtime="$app/MacOS/LearnHarness"
               ;;
             Windows)
-              payload="dist/win-unpacked/resources/server/standalone"
-              runtime="dist/win-unpacked/LearnHarness.exe"
+              payload="dist/${{ matrix.win_unpacked }}/resources/server/standalone"
+              runtime="dist/${{ matrix.win_unpacked }}/LearnHarness.exe"
               ;;
             Linux)
               payload="dist/linux-unpacked/resources/server/standalone"
@@ -200,7 +239,7 @@ jobs:
               node scripts/smoke-demo-runtime.mjs --standalone "$app/Resources/server/standalone" --runtime "$app/MacOS/LearnHarness" --browser
               ;;
             Windows)
-              node scripts/smoke-demo-runtime.mjs --standalone dist/win-unpacked/resources/server/standalone --runtime dist/win-unpacked/LearnHarness.exe --browser
+              node scripts/smoke-demo-runtime.mjs --standalone "dist/${{ matrix.win_unpacked }}/resources/server/standalone" --runtime "dist/${{ matrix.win_unpacked }}/LearnHarness.exe" --browser
               ;;
             Linux)
               xvfb-run -a node scripts/smoke-demo-runtime.mjs --standalone dist/linux-unpacked/resources/server/standalone --runtime dist/linux-unpacked/learnharness --browser
@@ -221,16 +260,63 @@ jobs:
             dist/*.blockmap
             dist/latest*.yml
 
-  # The last gate before a human publishes: after ALL three packaging jobs
-  # have uploaded, fail the run unless the tag's single draft release holds
-  # exactly the 11 verified assets (4 installers + mac updater ZIP + their
-  # blockmaps + 3 latest*.yml feeds) and the feeds reference those uploads
+  # Windows ships one installer per architecture but electron-updater reads
+  # ONE latest.yml. After all packaging jobs: take the x64 feed the x64 job
+  # published to the draft, merge in the arm64 job's feed (from its build
+  # artifact), and replace latest.yml on the draft. x64 stays files[0], so
+  # the legacy top-level path/sha512 still point at the x64 installer.
+  merge-win-feed:
+    name: Merge Windows update feed
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: learnharness-windows-arm64
+          path: ${{ runner.temp }}/arm64
+      - name: Merge and replace latest.yml on the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          npx tsx scripts/verify-release.ts select "$RUNNER_TEMP/releases.json" --tag "$GITHUB_REF_NAME" > "$RUNNER_TEMP/draft.json"
+          read -r release_id feed_id < <(DRAFT="$RUNNER_TEMP/draft.json" node -e '
+            const draft = JSON.parse(require("node:fs").readFileSync(process.env.DRAFT, "utf8"));
+            const feed = draft.assets.find((a) => a.name === "latest.yml");
+            if (!feed) { console.error("draft has no latest.yml"); process.exit(1); }
+            console.log(draft.releaseId, feed.id);
+          ')
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$feed_id" -H "Accept: application/octet-stream" > "$RUNNER_TEMP/latest-x64.yml"
+          npx tsx scripts/merge-win-feed.ts "$RUNNER_TEMP/latest-x64.yml" "$RUNNER_TEMP/arm64/latest.yml" > "$RUNNER_TEMP/latest.yml"
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$feed_id"
+          gh api -X POST -H "Content-Type: application/octet-stream" --input "$RUNNER_TEMP/latest.yml" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=latest.yml" > /dev/null
+          echo "latest.yml now lists both Windows installers"
+
+  # The last gate before a human publishes: after ALL four packaging jobs
+  # have uploaded and the Windows feed is merged, fail the run unless the
+  # tag's single draft release holds exactly the 13 verified assets
+  # (5 installers + mac updater ZIP + their blockmaps + 3 latest*.yml feeds) and the feeds reference those uploads
   # by exact name at the package.json version. Read-only: it never creates,
   # edits, publishes, or deletes anything. Manual rehearsals upload nothing,
   # so there is no draft to verify and the job stays skipped.
   verify:
     name: Verify draft release
-    needs: package
+    needs: [package, merge-win-feed]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

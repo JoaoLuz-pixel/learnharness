@@ -1,7 +1,7 @@
 /**
  * verify-release.ts — the final desktop-release gate (2026-10-13).
  *
- * Runs in the release workflow's LAST job, after all three packaging jobs
+ * Runs in the release workflow's LAST job, after all four packaging jobs
  * have uploaded to the tag's single draft GitHub Release, and fails the
  * workflow unless that draft holds exactly what end users and
  * electron-updater need. The workflow never publishes; this script only
@@ -19,9 +19,14 @@
  *     feed   latest-mac.yml — files[0] is the ZIP (writeUpdateInfoFiles
  *            sorts zip first) and the legacy top-level path/sha512 point
  *            at it.
- *   win (nsis x64; artifactName "${productName}-${version}-${arch}-setup.${ext}"):
+ *   win (nsis; config x64, plus arm64 via `--win nsis:arm64` on its own
+ *        runner; one installer per arch, each built natively;
+ *        artifactName "${productName}-${version}-${arch}-setup.${ext}"):
  *     exe    LearnHarness-<v>-x64-setup.exe   + .blockmap (createBlockmap)
- *     feed   latest.yml — a single file entry, the exe.
+ *     exe    LearnHarness-<v>-arm64-setup.exe + .blockmap (createBlockmap)
+ *     feed   latest.yml — merged by scripts/merge-win-feed.ts: files[0] is
+ *            the x64 exe (the legacy top-level path/sha512 point at it),
+ *            files[1] the arm64 exe; electron-updater picks by process.arch.
  *   linux (AppImage + deb, x64; artifactName "${productName}-${version}-${arch}.${ext}"
  *            is user-forced at the linux level, so it overrides BOTH targets'
  *            default name formats, and ${arch} expands per target ext:
@@ -87,11 +92,11 @@ export type DraftSelection =
 	| { ok: true; release: ReleaseRecord; warnings: string[] }
 	| Failures;
 
-/** The full expected asset inventory for one version (11 files). */
+/** The full expected asset inventory for one version (13 files). */
 export type ExpectedAssets = {
 	version: string;
 	mac: { dmg: string; zip: string; feed: string };
-	win: { exe: string; feed: string };
+	win: { exe: string; exeArm64: string; feed: string };
 	linux: { appImage: string; deb: string; feed: string };
 	/** Every asset name the draft must hold, and no others. */
 	files: string[];
@@ -125,6 +130,7 @@ export function expectedAssets(version: string): ExpectedAssets {
 	};
 	const win = {
 		exe: `${PRODUCT_NAME}-${version}-x64-setup.exe`,
+		exeArm64: `${PRODUCT_NAME}-${version}-arm64-setup.exe`,
 		feed: "latest.yml",
 	};
 	const linux = {
@@ -133,14 +139,14 @@ export function expectedAssets(version: string): ExpectedAssets {
 		feed: "latest-linux.yml",
 	};
 	// Sidecar differential-update blockmaps: emitted for dmg, mac zip and
-	// NSIS exe (createBlockmap); AppImage/deb have none in app-builder-lib 26.15.3.
-	const blockmaps = [mac.dmg, mac.zip, win.exe].map((name) => `${name}.blockmap`);
+	// NSIS exes (createBlockmap); AppImage/deb have none in app-builder-lib 26.15.3.
+	const blockmaps = [mac.dmg, mac.zip, win.exe, win.exeArm64].map((name) => `${name}.blockmap`);
 	return {
 		version,
 		mac,
 		win,
 		linux,
-		files: [mac.dmg, mac.zip, win.exe, linux.appImage, linux.deb, ...blockmaps, mac.feed, win.feed, linux.feed],
+		files: [mac.dmg, mac.zip, win.exe, win.exeArm64, linux.appImage, linux.deb, ...blockmaps, mac.feed, win.feed, linux.feed],
 	};
 }
 
@@ -279,6 +285,8 @@ export function verifyConfigAssumptions(config: unknown, pkg: unknown): { ok: tr
 		if (config.win.artifactName !== "${productName}-${version}-${arch}-setup.${ext}") {
 			bad(`win.artifactName changed (${JSON.stringify(config.win.artifactName)}) — expected names no longer hold`);
 		}
+		// x64 only by design: the arm64 installer is built with `--win nsis:arm64`
+		// on its own runner (listing both would make arch flags build both).
 		if (!sameTargets(config.win.target, [{ target: "nsis", arch: ["x64"] }])) {
 			bad(`win.target changed (${JSON.stringify(config.win.target)}) — expected names no longer hold`);
 		}
@@ -342,7 +350,7 @@ type FeedExpectation = {
 export function feedExpectations(expected: ExpectedAssets): FeedExpectation[] {
 	return [
 		{ file: expected.mac.feed, urls: [expected.mac.zip, expected.mac.dmg], first: expected.mac.zip },
-		{ file: expected.win.feed, urls: [expected.win.exe] },
+		{ file: expected.win.feed, urls: [expected.win.exe, expected.win.exeArm64], first: expected.win.exe },
 		{ file: expected.linux.feed, urls: [expected.linux.appImage, expected.linux.deb] },
 	];
 }

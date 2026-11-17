@@ -1,4 +1,4 @@
-# electron-builder config — LearnHarness desktop (macOS arm64; Windows/Linux x64).
+# electron-builder config — LearnHarness desktop (macOS arm64; Windows x64, + arm64 via `--win nsis:arm64`; Linux x64).
 #
 # Shape (fact-checked 2026-09-17):
 #   - the app's real server (.next/standalone, curated by
@@ -153,6 +153,16 @@ dmg:
 afterPack: scripts/after-pack.cjs
 win:
   icon: build/icon.ico
+  # Windows ARM64 (2026-11-17): one installer PER architecture, each built
+  # natively on its own machine — the server's native modules (.node) come
+  # from the build machine, so a cross-build would ship the wrong ones. The
+  # default stays x64 ONLY on purpose: ARM64 is requested explicitly with
+  # `--win nsis:arm64` (the target:arch form overrides this list). Listing
+  # both here would make `--win --x64` / `--win --arm64` build BOTH archs on
+  # one machine (verified: a broken x64 installer with arm64 natives, plus a
+  # combined installer). The release merges both builds' latest.yml into one
+  # feed (scripts/merge-win-feed.ts); electron-updater picks the file whose
+  # name holds its own process.arch.
   target:
     - target: nsis
       arch:

@@ -270,10 +270,12 @@ describe("desktop packaging policy", () => {
 		await validateConfiguration(config, { isEnabled: false });
 	});
 
-	it("ships Mac arm64, Windows NSIS x64, and both Linux x64 channels", () => {
+	it("ships Mac arm64, Windows NSIS x64 (arm64 via nsis:arm64), and both Linux x64 channels", () => {
 		assert.deepEqual(config.mac.target, [
 			{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] },
 		]);
+		// x64 stays the only default: ARM64 is built explicitly with
+		// `--win nsis:arm64` (listing both makes arch flags build both).
 		assert.deepEqual(config.win.target, [{ target: "nsis", arch: ["x64"] }]);
 		assert.equal(config.win.signExecutable, false);
 		assert.equal(config.win.verifyUpdateCodeSignature, false);
@@ -303,7 +305,7 @@ describe("workflow action versions", () => {
 			const workflow = yaml.load(readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), "utf8"));
 			const expected = ["actions/checkout@v7", "actions/setup-node@v7"];
 			if (filename === "release.yml") {
-				expected.push("actions/github-script@v9", "actions/upload-artifact@v7", "maxim-lobanov/setup-xcode@v1");
+				expected.push("actions/github-script@v9", "actions/upload-artifact@v7", "actions/download-artifact@v8", "maxim-lobanov/setup-xcode@v1");
 			}
 			const observed = new Set<string>();
 			for (const job of Object.values(workflow.jobs)) {
