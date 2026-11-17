@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download — LearnHarness (unofficial fork)</title>
+<meta name="description" content="Downloads for JoaoLuz-pixel's unofficial fork of LearnHarness, an agent harness for learning by Amos Blomqvist.">
+<style>
+:root {
+	--bg: #faf9f5; --card: #ffffff; --text: #1a1a1a; --muted: #5f5d57; --line: #e4e1d8;
+	--accent: #1a1a1a; --accent-text: #faf9f5; --note-bg: #f2efe6;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #1d1f24; --card: #262930; --text: #ecebe6; --muted: #a3a29c; --line: #3a3d45;
+		--accent: #ecebe6; --accent-text: #1d1f24; --note-bg: #2c2f37;
+	}
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: inherit; }
+main { max-width: 880px; margin: 0 auto; padding: 32px 16px 48px; }
+.banner { display: block; margin: 0 auto 8px; width: min(420px, 100%); height: auto; }
+.tagline { text-align: center; color: var(--muted); margin: 0 0 24px; }
+.fork { background: var(--note-bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+h1 { font-size: 28px; margin: 32px 0 4px; }
+.release { color: var(--muted); margin: 0 0 20px; min-height: 1.5em; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
+.card h2 { font-size: 18px; margin: 0; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; }
+.card .button { margin-top: auto; align-self: flex-start; }
+.button { display: inline-block; margin-top: 10px; padding: 9px 14px; border-radius: 10px; background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600; font-size: 15px; }
+.button[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.notes { margin: 24px 0 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+.notes li { margin: 4px 0; }
+.problem { display: none; background: var(--note-bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 0 0 16px; }
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+footer p { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+	<picture>
+		<source media="(prefers-color-scheme: dark)" srcset="../assets/lh_banner_dark.png">
+		<img class="banner" src="../assets/lh_banner_light.png" alt="LearnHarness">
+	</picture>
+	<p class="tagline">An agent harness for learning.</p>
+
+	<div class="fork">
+		<strong>Unofficial fork.</strong> These downloads are a community fork of
+		<a href="https://github.com/amosblomqvist/learnharness">LearnHarness</a> by Amos Blomqvist, maintained by
+		<a href="https://github.com/JoaoLuz-pixel">JoaoLuz-pixel</a>. The fork is not affiliated with or endorsed by the original project;
+		all credit for LearnHarness belongs to its author and <a href="https://github.com/amosblomqvist/learnharness/graphs/contributors">contributors</a>.
+		Licensed AGPL-3.0, like the original. Credits and the fork's changes: <a href="https://github.com/JoaoLuz-pixel/learnharness/blob/main/NOTICE.md">NOTICE.md</a>.
+		The official app is at <a href="https://learnharness.ai">learnharness.ai</a>.
+	</div>
+
+	<h1>Download</h1>
+	<p class="release" id="release">Looking up the latest release…</p>
+	<div class="problem" id="problem"></div>
+
+	<div class="grid">
+		<div class="card"><h2>macOS</h2><p>Apple Silicon · arm64 · DMG</p>
+			<a class="button" data-asset="mac" aria-disabled="true" href="https://github.com/JoaoLuz-pixel/learnharness/releases">Download DMG</a></div>
+		<div class="card"><h2>Windows</h2><p>x64 · installer · most PCs</p>
+			<a class="button" data-asset="winX64" aria-disabled="true" href="https://github.com/JoaoLuz-pixel/learnharness/releases">Download for x64</a></div>
+		<div class="card"><h2>Windows on ARM</h2><p>ARM64 · installer · e.g. Snapdragon PCs, runs natively</p>
+			<a class="button" data-asset="winArm64" aria-disabled="true" href="https://github.com/JoaoLuz-pixel/learnharness/releases">Download for ARM64</a></div>
+		<div class="card"><h2>Linux · AppImage</h2><p>x64 · recommended</p>
+			<a class="button" data-asset="appImage" aria-disabled="true" href="https://github.com/JoaoLuz-pixel/learnharness/releases">Download AppImage</a></div>
+		<div class="card"><h2>Linux · Debian/Ubuntu</h2><p>x64 · .deb</p>
+			<a class="button" data-asset="deb" aria-disabled="true" href="https://github.com/JoaoLuz-pixel/learnharness/releases">Download .deb</a></div>
+	</div>
+
+	<ul class="notes">
+		<li>Windows builds are unsigned. SmartScreen may warn on install.</li>
+		<li>The macOS build is unsigned and not notarized. On first launch, right-click the app and choose <strong>Open</strong> (or System Settings → Privacy &amp; Security → <strong>Open Anyway</strong>). In-app updates don't work for unsigned macOS apps: download new versions here.</li>
+		<li>AppImages must be marked executable before opening.</li>
+		<li>Not sure which Windows build? Settings → System → About → "System type" says x64 or ARM-based.</li>
+	</ul>
+
+	<footer>
+		<p>LearnHarness © 2026 Amos Blomqvist and contributors · <a href="https://github.com/JoaoLuz-pixel/learnharness/blob/main/LICENSE">AGPL-3.0</a> ·
+			<a href="https://github.com/amosblomqvist/learnharness">Original source</a> · <a href="https://learnharness.ai">Official site</a></p>
+		<p>Fork changes by <a href="https://github.com/JoaoLuz-pixel">JoaoLuz-pixel</a> ·
+			<a href="https://github.com/JoaoLuz-pixel/learnharness">Fork source</a> · <span id="source"></span></p>
+	</footer>
+</main>
+<script>
+(() => {
+	const REPO = "JoaoLuz-pixel/learnharness";
+	const RELEASES = `https://github.com/${REPO}/releases`;
+	const DOWNLOAD_PREFIX = `https://github.com/${REPO}/releases/download/`;
+	const PATTERNS = {
+		mac: /^LearnHarness-[\d.]+-arm64\.dmg$/,
+		winX64: /^LearnHarness-[\d.]+-x64-setup\.exe$/,
+		winArm64: /^LearnHarness-[\d.]+-arm64-setup\.exe$/,
+		appImage: /^LearnHarness-[\d.]+-x86_64\.AppImage$/,
+		deb: /^LearnHarness-[\d.]+-amd64\.deb$/,
+	};
+	const release = document.getElementById("release");
+	const problem = document.getElementById("problem");
+	const source = document.getElementById("source");
+	const say = (el, parts) => { el.replaceChildren(...parts.map((p) => {
+		if (typeof p === "string") return document.createTextNode(p);
+		const a = document.createElement("a"); a.href = p.href; a.textContent = p.text; return a;
+	})); };
+	const fallback = (message) => {
+		problem.style.display = "block";
+		say(problem, [message + " ", { href: RELEASES, text: "See all releases on GitHub" }, "."]);
+		release.textContent = "";
+		for (const button of document.querySelectorAll("[data-asset]")) button.removeAttribute("aria-disabled");
+	};
+	fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } })
+		.then((res) => {
+			if (res.status === 404) throw Object.assign(new Error("none"), { none: true });
+			if (!res.ok) throw new Error(String(res.status));
+			return res.json();
+		})
+		.then((data) => {
+			const tag = typeof data.tag_name === "string" && /^v?[\d.]+$/.test(data.tag_name) ? data.tag_name : null;
+			if (!tag) throw new Error("bad tag");
+			say(release, [`Version ${tag.replace(/^v/, "")} · `, { href: `${RELEASES}/tag/${tag}`, text: "Release notes" }, " · ", { href: RELEASES, text: "All releases" }]);
+			say(source, [{ href: `https://github.com/${REPO}/tree/${tag}`, text: `Source code for ${tag}` }]);
+			const assets = Array.isArray(data.assets) ? data.assets : [];
+			let missing = 0;
+			for (const button of document.querySelectorAll("[data-asset]")) {
+				const pattern = PATTERNS[button.dataset.asset];
+				const asset = assets.find((a) => typeof a.name === "string" && pattern.test(a.name) &&
+					typeof a.browser_download_url === "string" && a.browser_download_url.startsWith(DOWNLOAD_PREFIX));
+				if (asset) { button.href = asset.browser_download_url; button.removeAttribute("aria-disabled"); }
+				else { missing++; button.href = `${RELEASES}/tag/${tag}`; button.removeAttribute("aria-disabled"); button.textContent = "See release"; }
+			}
+			if (missing) { problem.style.display = "block"; say(problem, [`${missing} download(s) are not in this release; those buttons open the release page instead.`]); }
+		})
+		.catch((error) => fallback(error && error.none ? "No release has been published yet." : "Couldn't reach GitHub to find the latest release."));
+})();
+</script>
+</body>
+</html>

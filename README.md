@@ -8,13 +8,26 @@
 
 <p align="center"><strong>An agent harness for learning.</strong></p>
 
+> **Unofficial fork.** This is a community fork of [LearnHarness](https://github.com/amosblomqvist/learnharness) by Amos Blomqvist, maintained by [JoaoLuz-pixel](https://github.com/JoaoLuz-pixel). It is not affiliated with or endorsed by the original project; all credit for LearnHarness belongs to its author and [contributors](https://github.com/amosblomqvist/learnharness/graphs/contributors). Licensed AGPL-3.0, like the original. See [NOTICE.md](NOTICE.md) for credits and the dated list of this fork's changes. The official app is at [learnharness.ai](https://learnharness.ai).
+
 <p align="center">
-  <a href="https://learnharness.ai">Download</a> ·
+  <a href="https://joaoluz-pixel.github.io/learnharness/download/">Download (fork)</a> ·
+  <a href="https://github.com/amosblomqvist/learnharness">Original project</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a> ·
   <a href="https://discord.gg/5tCHHQEB2e">Discord</a>
 </p>
+
+## What this fork adds
+
+On top of LearnHarness 0.6.1 ([details and dates in NOTICE.md](NOTICE.md)):
+
+- **Images and documents in the chat:** paste or drop images, and attach documents by paste, drop or paperclip in both the main bar and the "Thinking while reading" box. The agent reads Word, PowerPoint, Excel, OpenDocument and `.zip` files.
+- **"Thinking while reading" send:** post a remark or question at any time; the open question is paused and the teacher responds.
+- **Device Sync:** one shared learning progress across your devices, through an SSH endpoint you control.
+- **Faster session opening:** long sessions show their latest messages first.
+- **Native Windows ARM64 build** for Windows on ARM PCs.
 
 LearnHarness uses AI agents to plan and teach lessons from your current understanding to your goal. It builds a detailed picture of what you understand and how you reason. That picture is updated as you learn.
 
@@ -45,9 +58,9 @@ Future teaching sessions can read the graph instead of starting from scratch. Pr
 
 ## Download and get started
 
-**[Download from learnharness.ai](https://learnharness.ai)** · [GitHub Releases](https://github.com/amosblomqvist/learnharness/releases)
+**[Download this fork's build](https://joaoluz-pixel.github.io/learnharness/download/)** · [Fork releases](https://github.com/JoaoLuz-pixel/learnharness/releases) · The original app: [learnharness.ai](https://learnharness.ai)
 
-- **macOS (Apple Silicon):** signed and notarized DMG. Drag the app to Applications.
+- **macOS (Apple Silicon):** DMG. Drag the app to Applications. This fork's macOS build is **unsigned and not notarized**: on first launch, right-click the app and choose **Open** (or System Settings → Privacy & Security → **Open Anyway**). In-app updates don't work for unsigned macOS apps, so download new versions from the page above.
 - **Windows (x64 or ARM64):** run the installer for your PC's processor: `x64` for most PCs, `arm64` for Windows on ARM (for example Snapdragon laptops), where it runs natively instead of under emulation. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
 - **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
 
@@ -55,7 +68,7 @@ Choose your models, then start a session with what you want to understand. You c
 
 See [Getting started](docs/getting-started.md) for model setup, dictation, files, and notes imports, and [context, caching, and costs](docs/compaction-accounting.md) for advanced cache preferences.
 
-All three platforms support in-app updates.
+In-app updates work on Windows and Linux; this fork's unsigned macOS build updates by downloading the new version.
 
 ## Your keys, your data
 
@@ -83,6 +96,6 @@ Security vulnerabilities: report privately as described in [SECURITY.md](SECURIT
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0](LICENSE), unchanged from the original. LearnHarness is by Amos Blomqvist and contributors; this fork's credits and changes are in [NOTICE.md](NOTICE.md).
 
 The app is free and open forever. If we ever charge for anything, it will be for convenience — managed keys, hosting — never for features you can run locally.

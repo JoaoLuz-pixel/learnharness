@@ -197,8 +197,11 @@ publish:
   # from a private repo are impossible, and a token baked into the app
   # would be a leak. desktop:dist passes no --publish flag, so builds never
   # upload; publishing happens at release time (GH_TOKEN + --publish).
+  # This fork's builds update from the FORK's releases (JoaoLuz-pixel,
+  # decided 2026-11-17): installs of the fork stay on the fork's features.
+  # The original project publishes from amosblomqvist/learnharness.
   - provider: github
-    owner: amosblomqvist
+    owner: JoaoLuz-pixel
     repo: learnharness
     # All three CI jobs contribute assets; only the owner publishes it.
     releaseType: draft

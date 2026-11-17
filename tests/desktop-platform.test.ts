@@ -351,17 +351,17 @@ describe("desktop release workflow", () => {
 	type Release = { id: number; tag_name: string; draft: boolean };
 
 	/** Execute the REAL action script with an in-memory GitHub API. */
-	async function prepareDraft(releases: Release[]) {
+	async function prepareDraft(releases: Release[], repoId = { owner: "test-owner", repo: "test-repo" }) {
 		const created: Record<string, unknown>[] = [];
 		const listReleases = () => {};
 		await runInNewContext(`(async () => { ${script} })()`, {
-			context: { repo: { owner: "test-owner", repo: "test-repo" }, ref: "refs/tags/v0.3.0" },
+			context: { repo: repoId, ref: "refs/tags/v0.3.0" },
 			core: { info() {} },
 			github: {
 				paginate: async (method: unknown, options: unknown) => {
 					assert.equal(method, listReleases);
 					assert.deepEqual(JSON.parse(JSON.stringify(options)), {
-						owner: "test-owner", repo: "test-repo", per_page: 100,
+						...repoId, per_page: 100,
 					});
 					return releases;
 				},
@@ -414,10 +414,34 @@ describe("desktop release workflow", () => {
 		assert.equal(ciMac?.os, "macos-15", "ordinary CI keeps older macOS build/boot coverage");
 	});
 
-	it("creates exactly one unpublished draft when none matches", async () => {
-		assert.deepEqual(await prepareDraft([{ id: 9, tag_name: "v0.2.0", draft: false }]), [{
-			owner: "test-owner", repo: "test-repo", tag_name: "v0.3.0", name: "0.3.0", draft: true,
+	it("creates exactly one unpublished draft when none matches (the original repo: no notes)", async () => {
+		const upstream = { owner: "amosblomqvist", repo: "learnharness" };
+		assert.deepEqual(await prepareDraft([{ id: 9, tag_name: "v0.2.0", draft: false }], upstream), [{
+			owner: "amosblomqvist", repo: "learnharness", tag_name: "v0.3.0", name: "0.3.0", draft: true,
 		}]);
+	});
+
+	it("gives a fork's draft the AGPL credit notice and a link to this build's source", async () => {
+		const [created] = await prepareDraft([{ id: 9, tag_name: "v0.2.0", draft: false }]);
+		assert.ok(created);
+		const { body, ...rest } = created as Record<string, unknown> & { body: string };
+		assert.deepEqual(rest, { owner: "test-owner", repo: "test-repo", tag_name: "v0.3.0", name: "0.3.0", draft: true });
+		assert.match(body, /Unofficial fork of \[LearnHarness\]\(https:\/\/github\.com\/amosblomqvist\/learnharness\)\*\* by Amos Blomqvist, maintained by test-owner/);
+		assert.match(body, /Licensed AGPL-3\.0-only, like the original/);
+		assert.match(body, /NOTICE\.md\]\(https:\/\/github\.com\/test-owner\/test-repo\/blob\/v0\.3\.0\/NOTICE\.md\)/);
+		assert.match(body, /Source code for this build:\*\* tag \[v0\.3\.0\]\(https:\/\/github\.com\/test-owner\/test-repo\/tree\/v0\.3\.0\)/);
+		assert.match(body, /macOS build is unsigned and not notarized/);
+	});
+
+	it("signs and notarizes macOS only in the original repo; forks publish it unsigned", () => {
+		const step = (name: string) => packaging.steps.find((candidate) => (candidate as { name?: string }).name === name) as Step | undefined;
+		for (const name of ["Validate macOS release secrets", "Signed and notarized macOS release → draft"]) {
+			assert.match(step(name)?.if ?? "", /github\.repository == 'amosblomqvist\/learnharness'/, name);
+		}
+		const fork = step("Unsigned macOS release → draft (forks)");
+		assert.match(fork?.if ?? "", /github\.repository != 'amosblomqvist\/learnharness'/);
+		assert.match(fork?.run ?? "", /--publish always -c\.mac\.notarize=false/);
+		assert.equal(fork?.env?.CSC_IDENTITY_AUTO_DISCOVERY, "false");
 	});
 
 	it("reuses an existing draft without creating another", async () => {

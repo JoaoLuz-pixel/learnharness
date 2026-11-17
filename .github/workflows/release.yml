@@ -79,8 +79,20 @@ jobs:
               core.info(`Reusing draft ${matches[0].id} for ${tag}`);
               return;
             }
+            // Forks (not the original repo) carry the AGPL credit notice and a
+            // link to the exact source of this build in their release notes.
+            const UPSTREAM = "amosblomqvist/learnharness";
+            const isFork = `${owner}/${repo}`.toLowerCase() !== UPSTREAM;
+            const body = isFork ? [
+              `**Unofficial fork of [LearnHarness](https://github.com/${UPSTREAM})** by Amos Blomqvist, maintained by ${owner}. It is not affiliated with or endorsed by the original project; all credit for LearnHarness belongs to its author and contributors (see [NOTICE.md](https://github.com/${owner}/${repo}/blob/${tag}/NOTICE.md)). Licensed AGPL-3.0-only, like the original.`,
+              "",
+              `**Source code for this build:** tag [${tag}](https://github.com/${owner}/${repo}/tree/${tag}) (GitHub attaches the source archives below).`,
+              "",
+              "**Installing:** Windows builds (x64 and ARM64) are unsigned, so SmartScreen may warn. The macOS build is unsigned and not notarized: on first launch, right-click the app and choose Open (or System Settings → Privacy & Security → Open Anyway); macOS updates must be downloaded manually. AppImages must be made executable before opening.",
+            ].join("\n") : undefined;
             const {data} = await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, name: version, draft: true,
+              ...(body ? {body} : {}),
             });
             core.info(`Created draft ${data.id} for ${tag}`);
 
@@ -144,7 +156,7 @@ jobs:
       - run: node scripts/build-server.mjs
       - run: node scripts/smoke-server.mjs --electron
       - name: Validate macOS release secrets
-        if: github.event_name == 'push' && runner.os == 'macOS'
+        if: github.event_name == 'push' && runner.os == 'macOS' && github.repository == 'amosblomqvist/learnharness'
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -159,7 +171,7 @@ jobs:
             fi
           done
       - name: Signed and notarized macOS release → draft
-        if: github.event_name == 'push' && runner.os == 'macOS'
+        if: github.event_name == 'push' && runner.os == 'macOS' && github.repository == 'amosblomqvist/learnharness'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -168,6 +180,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder ${{ matrix.builder_args }} --publish always -c.forceCodeSigning=true
+      # Forks have no Apple Developer ID: the same unsigned, un-notarized
+      # build as the manual rehearsal, published to the fork's draft.
+      - name: Unsigned macOS release → draft (forks)
+        if: github.event_name == 'push' && runner.os == 'macOS' && github.repository != 'amosblomqvist/learnharness'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder ${{ matrix.builder_args }} --publish always -c.mac.notarize=false
       - name: Windows/Linux release → draft
         if: github.event_name == 'push' && runner.os != 'macOS' && matrix.platform != 'windows-arm64'
         env:
