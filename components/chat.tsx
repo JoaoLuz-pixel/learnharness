@@ -57,6 +57,7 @@ import {
 	firstSourceTextParts,
 	cliContextWindowOf,
 	messageAnchorId,
+	messageIdFromHash,
 	sideEntryPoints,
 	sideSegmentId,
 	textPartMessageId,
@@ -81,6 +82,7 @@ import { pendingPluginQuestionOf, pluginQuestionCallsOf } from "@/src/core";
 import { pluginQuestionOccurrenceKey, type PluginQuestionSnapshot } from "@/src/core";
 import type { PluginQuestionDraft } from "./session-core";
 import { SessionFind } from "@/components/session-find";
+import { useProgressiveHistory } from "@/components/progressive-history";
 import { SessionMessageNavigation } from "@/components/session-navigation";
 import { SelectionToolbar } from "@/components/selection-toolbar";
 import { createCiteAction, type CitationEditTarget } from "@/components/citation-actions";
@@ -313,6 +315,11 @@ export function Chat({
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
 	const { canonicalMessages, reconciliation, reconcile, pluginQuestionAvailability, pluginQuestionDraft, pluginProblemAvailability, pluginProblemDraft, dismissPluginQuestion, readRecord, messages, nativeMessages, hasConfirmedConversation, contextTokens, send, continueIfOwed, steer, steerQueue, submitAnswer, dismissQuestion, dismissProblem, questionDraft, saveQuestionDraft, status, evaluating, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initialError, initiallyInFlight });
+	// Recent-first opening (owner, 2026-11-17): the latest messages render
+	// at once, older ones fill in while idle (components/progressive-history).
+	const { renderFrom, completeNow: renderWholeHistory } = useProgressiveHistory(messages);
+	// A link to a specific message (#hash) must find its anchor: render it all.
+	useEffect(() => { if (messageIdFromHash(window.location.hash)) renderWholeHistory(); }, [renderWholeHistory]);
 
 	const controller = useOptionalInteractionLayers();
 	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
@@ -1837,7 +1844,7 @@ export function Chat({
 					<PluginSessionTopBarActions readContext={actionContext} captureContext={captureActionContext} refreshRef={refreshPluginActions} />
 				</TopBar>
 
-				<SessionFind scopeRef={sessionFindScopeRef} scrollContextRef={scrollContextRef} />
+				<SessionFind scopeRef={sessionFindScopeRef} scrollContextRef={scrollContextRef} onOpen={renderWholeHistory} />
 				<div ref={sessionFindScopeRef} className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant" contextRef={scrollContextRef}>
 					<SessionMessageNavigation />
@@ -1851,7 +1858,8 @@ export function Chat({
 								/>
 							)}
 
-							{messages.map((m, mi) =>
+							{/* `mi` stays the index in the WHOLE history (phases[mi] etc.). */}
+							{(renderFrom ? messages.slice(renderFrom) : messages).map((m, k, _rendered, mi = k + renderFrom) =>
 								m.role === "user" && isSubagentSteer(m) ? (
 									// Sub-agent delivery (wake-pipeline steer): NO message bubble — the
 									// artifact card sits in the transcript column directly, full width

@@ -727,6 +727,11 @@ async function main() {
 		await startServer(new URL(url).port);
 		await waitUntilUp(url);
 		log(`server up: ${url}`);
+		// Launch warm-up (owner, 2026-11-17): the first session opened after
+		// launch paid ~1.3 s loading the session page's server code. One
+		// hidden request for a session that cannot exist loads that code now
+		// (a plain 404: no record is read or written). Fire-and-forget.
+		fetch(`${url}/chat/lh-warmup`, { headers: { RSC: "1" } }).then((res) => res.arrayBuffer()).catch(() => undefined);
 	} else {
 		log(`dev mode: ${devUrl} — waiting for server`);
 		const { waitForDevServer } = require("./dev-server-readiness.cjs");

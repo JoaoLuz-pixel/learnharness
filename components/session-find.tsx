@@ -56,9 +56,12 @@ export function sessionFindHasForegroundLayer(doc: Document, scope?: HTMLElement
 /** Mounted for the lifetime of ONE Chat (which is keyed by chatId). Closing
  * keeps the query/reading position; changing sessions resets all local state.
  * The bar lives outside scopeRef, so it never finds its own query or count. */
-export function SessionFind({ scopeRef, scrollContextRef }: {
+export function SessionFind({ scopeRef, scrollContextRef, onOpen }: {
 	scopeRef: RefObject<HTMLDivElement | null>;
 	scrollContextRef: RefObject<SessionScrollContext | null>;
+	/** Called as Find opens: the session renders any history still filling
+	 *  in (recent-first opening), so Find always covers the whole conversation. */
+	onOpen?: () => void;
 }) {
 	const controller = useOptionalInteractionLayers();
 	const [open, setOpen] = useState(false);
@@ -82,13 +85,14 @@ export function SessionFind({ scopeRef, scrollContextRef }: {
 		const onFind = () => {
 			if (!isInteractionScopeEligible(scopeRef.current, controller)) return;
 			if (!open) previousFocus.current = document.activeElement as HTMLElement | null;
+			onOpen?.();
 			setOpen(true);
 			// A second Mod+F focuses/selects the retained query, not a second bar.
 			if (open) { inputRef.current?.focus({ preventScroll: true }); inputRef.current?.select(); }
 		};
 		window.addEventListener(kbdEventForAction("find"), onFind);
 		return () => window.removeEventListener(kbdEventForAction("find"), onFind);
-	}, [open, controller, scopeRef]);
+	}, [open, controller, scopeRef, onOpen]);
 
 	useEffect(() => {
 		if (!open || !isInteractionScopeEligible(scopeRef.current, controller)) return;
