@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { SYNC_INTERVALS, endpointCommands, type ConflictDecision, type DeviceSyncStatus, type EndpointOs, type JoinChoice, type SyncConflictView, type SyncProbeResult } from "@/src/core";
+import { SYNC_INTERVALS, endpointCommands, removeSyncCommand, type ConflictDecision, type DeviceSyncStatus, type EndpointOs, type JoinChoice, type SyncChoiceView, type SyncConflictView, type SyncProbeResult, type SyncTarget } from "@/src/core";
 import { SettingsGroup, SettingsRow, ThinSelect, Toggle } from "./controls.tsx";
 import { useDeviceSync } from "@/components/use-device-sync";
 import { HostDialog } from "@/components/host-dialog";
@@ -23,9 +23,9 @@ const TOGGLE_LABELS = [
 	["promptsThemes", "Prompt overrides & themes", "Your custom teacher prompts and themes"],
 ] as const;
 
-const button = "rounded-sm border border-border bg-background px-2.5 py-1 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 disabled:cursor-not-allowed disabled:opacity-50";
-const primary = "rounded-sm border border-primary bg-primary px-2.5 py-1 font-ui text-xs text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
-const danger = "rounded-sm border border-destructive/50 bg-destructive/10 px-2.5 py-1 font-ui text-xs text-destructive transition-colors hover:bg-destructive/20";
+const button = "whitespace-nowrap rounded-sm border border-border bg-background px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 disabled:cursor-not-allowed disabled:opacity-50";
+const primary = "whitespace-nowrap rounded-sm border border-primary bg-primary px-3 py-1.5 font-ui text-xs text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
+const danger = "whitespace-nowrap rounded-sm border border-destructive/50 bg-destructive/10 px-3 py-1.5 font-ui text-xs text-destructive transition-colors hover:bg-destructive/20";
 const input = "h-7 rounded-sm border border-border bg-background px-2 font-ui text-xs text-foreground outline-none focus:border-primary/60";
 
 function when(iso: string | null | undefined): string {
@@ -64,6 +64,106 @@ export function EndpointInstructions({ publicKey }: { publicKey: string }) {
 		))}
 		<p className="text-xs text-muted-foreground">Then come back here and enter the endpoint&apos;s address below. For each extra device, only step {commands.setup.length + 1} is needed, with that device&apos;s own key.</p>
 	</div>;
+}
+
+/** What the chooser has picked: an existing sync, or a new one with a name. */
+export interface SyncPick { mode: "join" | "create"; joinId: string | null; name: string; join: JoinChoice }
+export const initialPick = (syncs: SyncChoiceView[], deviceName: string, exclude?: string | null): SyncPick => {
+	const joinable = syncs.filter(sync => sync.id !== exclude);
+	return { mode: joinable.length ? "join" : "create", joinId: joinable.length === 1 ? joinable[0]!.id : null, name: `${deviceName}'s sync`, join: "merge" };
+};
+/** The target to send, or null while the pick is incomplete. */
+export function pickTarget(pick: SyncPick): SyncTarget | null {
+	if (pick.mode === "create") return pick.name.trim() ? { kind: "create", name: pick.name.trim() } : null;
+	return pick.joinId ? { kind: "join", id: pick.joinId } : null;
+}
+
+function RemoveSyncHelp({ syncId }: { syncId: string }) {
+	return <details className="mt-1 text-[11px] text-muted-foreground">
+		<summary className="cursor-pointer select-none">Remove this sync from the endpoint (by hand)</summary>
+		<p className="mt-1">The app never deletes a sync. If nobody uses this one any more, run the command for the endpoint&apos;s system. {removeSyncCommand("linux", syncId).note}</p>
+		{(["linux", "macos", "windows"] as const).map(os => (
+			<div key={os} className="mt-1">
+				<p>{os === "linux" ? "Linux" : os === "macos" ? "macOS" : "Windows (PowerShell)"}</p>
+				<CopyBlock code={removeSyncCommand(os, syncId).code} label={`Remove sync on ${os}`} />
+			</div>
+		))}
+	</details>;
+}
+
+/**
+ * The sync chooser (owner, 2026-11-20): every sync on the endpoint with the
+ * devices paired to it, then Join one or Create my own. Joining asks the
+ * one-time question about this device's own progress.
+ */
+export function SyncChooser({ syncs, pick, onPick, currentSyncId }: { syncs: SyncChoiceView[]; pick: SyncPick; onPick: (next: SyncPick) => void; currentSyncId?: string | null }) {
+	const set = (patch: Partial<SyncPick>) => onPick({ ...pick, ...patch });
+	return <div data-testid="sync-chooser" className="flex flex-col gap-2 text-xs">
+		{syncs.length === 0
+			? <p className="text-foreground">This endpoint has no syncs yet. Create the first one; your other devices can join it.</p>
+			: <p className="text-foreground">This endpoint holds {syncs.length === 1 ? "a sync" : `${syncs.length} syncs`}. Join one, or create your own.</p>}
+		{syncs.map(sync => {
+			const current = sync.id === currentSyncId;
+			return <label key={sync.id} data-testid="sync-option" className={`flex items-start gap-2 rounded-md border p-2 ${current ? "opacity-60" : ""}`}>
+				<input type="radio" name="sync-pick" disabled={current} checked={pick.mode === "join" && pick.joinId === sync.id} onChange={() => set({ mode: "join", joinId: sync.id })} />
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="font-medium text-foreground">{sync.name}{current ? " (this device's sync)" : ""}</span>
+					<span className="text-muted-foreground">Created by {sync.createdBy} · {when(sync.createdAt)}</span>
+					{sync.devices.length
+						? <span className="text-muted-foreground">Devices: {sync.devices.map(d => `${d.name} (last seen ${when(d.lastSeen)})`).join(", ")}</span>
+						: <span className="text-muted-foreground">No devices yet</span>}
+					<RemoveSyncHelp syncId={sync.id} />
+				</span>
+			</label>;
+		})}
+		<label data-testid="sync-option-create" className="flex items-start gap-2 rounded-md border p-2">
+			<input type="radio" name="sync-pick" checked={pick.mode === "create"} onChange={() => set({ mode: "create" })} />
+			<span className="flex flex-1 flex-col gap-1">
+				<span className="font-medium text-foreground">Create my own sync</span>
+				<span className="text-muted-foreground">It starts from this device&apos;s progress. Other devices can join it later.</span>
+				{pick.mode === "create" && <input aria-label="Sync name" maxLength={60} className={input} value={pick.name} onChange={e => set({ name: e.currentTarget.value })} />}
+			</span>
+		</label>
+		{pick.mode === "join" && pick.joinId && <fieldset className="flex flex-col gap-1">
+			<legend className="mb-1 text-foreground">What about this device&apos;s own progress?</legend>
+			<label className="flex items-start gap-2"><input type="radio" name="join" checked={pick.join === "merge"} onChange={() => set({ join: "merge" })} /> <span><strong>Merge it</strong> into the sync&apos;s progress (recommended)</span></label>
+			<label className="flex items-start gap-2"><input type="radio" name="join" checked={pick.join === "set-aside"} onChange={() => set({ join: "set-aside" })} /> <span><strong>Set it aside</strong> and use the sync&apos;s progress. You can restore it later from this page.</span></label>
+		</fieldset>}
+	</div>;
+}
+
+function ChangeSyncDialog({ status, onClose, listSyncs, onConfirm }: { status: DeviceSyncStatus; onClose: () => void; listSyncs: () => Promise<SyncChoiceView[]>; onConfirm: (target: SyncTarget, join?: JoinChoice) => Promise<void> }) {
+	const [syncs, setSyncs] = useState<SyncChoiceView[] | null>(null);
+	const [pick, setPick] = useState<SyncPick | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const deviceName = status.deviceName, currentId = status.sync?.id;
+	useEffect(() => {
+		let live = true;
+		listSyncs().then(list => { if (live) { setSyncs(list); setPick(initialPick(list, deviceName, currentId)); } })
+			.catch(err => { if (live) setError((err as Error).message); });
+		return () => { live = false; };
+	}, [listSyncs, deviceName, currentId]);
+	const target = pick ? pickTarget(pick) : null;
+	const confirm = async () => {
+		if (!target || !pick) return;
+		setBusy(true); setError("");
+		try { await onConfirm(target, target.kind === "join" ? pick.join : undefined); onClose(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+	};
+	const frame = <div className="mx-4 flex max-h-[85dvh] w-full max-w-lg flex-col rounded-xl border bg-card p-5 shadow-lg" onClick={e => e.stopPropagation()}>
+		<h2 className="text-sm font-semibold text-card-foreground">Change sync</h2>
+		<p className="mt-1.5 text-xs text-muted-foreground">This device leaves &ldquo;{status.sync?.name}&rdquo;, which keeps its progress for its other devices. A full backup of this device&apos;s data is taken first, and this device keeps its key.</p>
+		<div className="mt-3 min-h-0 overflow-y-auto">
+			{syncs && pick ? <SyncChooser syncs={syncs} pick={pick} onPick={setPick} currentSyncId={status.sync?.id} /> : !error && <p className="text-xs text-muted-foreground">Checking the endpoint…</p>}
+		</div>
+		{error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
+		<div className="mt-4 flex justify-end gap-2">
+			<button type="button" className={button} onClick={onClose} disabled={busy}>Cancel</button>
+			<button type="button" className={primary} data-testid="change-sync-confirm" disabled={busy || !target} onClick={() => void confirm()}>{target?.kind === "create" ? "Create and switch" : "Switch"}</button>
+		</div>
+	</div>;
+	return <HostDialog open frame={frame} aria-label="Change sync" onClose={() => { onClose(); return "closed"; }}
+		backdropProps={{ className: "fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm" }}>{frame.props.children}</HostDialog>;
 }
 
 function ConflictDialog({ conflict, onClose, onDecide }: { conflict: SyncConflictView; onClose: () => void; onDecide: (d: ConflictDecision) => Promise<void> }) {
@@ -119,11 +219,13 @@ function ForgetDialog({ publicKey, onClose, onConfirm }: { publicKey: string | n
 }
 
 export function DeviceSyncSection() {
-	const { status, act, probe } = useDeviceSync();
+	const { status, act, probe, listSyncs } = useDeviceSync();
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("22");
 	const [probed, setProbed] = useState<SyncProbeResult | null>(null);
-	const [join, setJoin] = useState<JoinChoice>("merge");
+	const [pick, setPick] = useState<SyncPick | null>(null);
+	const [changing, setChanging] = useState(false);
+	const [renaming, setRenaming] = useState<string | null>(null);
 	const [trusted, setTrusted] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
@@ -172,7 +274,7 @@ export function DeviceSyncSection() {
 		{status.publicKey && showSetup && <SettingsGroup label="Endpoint">
 			{connected ? <>
 				<SettingsRow label={`${status.endpoint!.host}:${status.endpoint!.port}`} hint={`Identity ${status.endpoint!.fingerprint}`}>
-					<span className="flex gap-1.5">
+					<span className="flex shrink-0 gap-2">
 						{status.enabled
 							? <><button type="button" className={button} disabled={busy} onClick={() => void run(() => act("sync-now"))}>Sync now</button>
 								<button type="button" className={button} disabled={busy} onClick={() => void run(() => act("disconnect"))}>Disconnect</button></>
@@ -180,26 +282,37 @@ export function DeviceSyncSection() {
 						<button type="button" className={danger} disabled={busy} onClick={() => setForgetting(true)}>Forget</button>
 					</span>
 				</SettingsRow>
-				<p className="text-xs text-muted-foreground">Disconnect pauses sync and keeps this device&apos;s key, so you can reconnect any time. Forget removes the endpoint and deletes the key.</p>
+				{status.sync && <SettingsRow label="Sync" hint="The progress this device shares. Any device in it can rename it">
+					{renaming === null ? <span className="flex shrink-0 items-center gap-2">
+						<span data-testid="sync-name" className="whitespace-nowrap font-ui text-xs text-foreground">{status.sync.name}</span>
+						<button type="button" className={button} disabled={busy} onClick={() => setRenaming(status.sync!.name)}>Rename</button>
+						<button type="button" className={button} disabled={busy} data-testid="change-sync" onClick={() => setChanging(true)}>Change sync</button>
+					</span> : <span className="flex shrink-0 items-center gap-2">
+						<input aria-label="Sync name" maxLength={60} className={input} value={renaming} onChange={e => setRenaming(e.currentTarget.value)} />
+						<button type="button" className={primary} disabled={busy || !renaming.trim()} onClick={() => void run(async () => { await act("rename-sync", { name: renaming }); setRenaming(null); })}>Save</button>
+						<button type="button" className={button} disabled={busy} onClick={() => setRenaming(null)}>Cancel</button>
+					</span>}
+				</SettingsRow>}
+				<p className="text-xs text-muted-foreground">Disconnect pauses sync and keeps this device&apos;s key, so you can reconnect any time. Change sync moves this device to another sync on the same endpoint. Forget removes the endpoint and deletes the key.</p>
 			</> : probed ? <div className="flex flex-col gap-2" data-testid="sync-confirm">
 				<p className="text-xs text-foreground">The endpoint presented this identity. Check it matches the endpoint (<code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on Linux/macOS):</p>
 				<code className="rounded-sm bg-muted/40 px-2 py-1 font-mono text-[11px]">{probed.fingerprint}</code>
 				<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={trusted} onChange={e => setTrusted(e.currentTarget.checked)} /> This is my endpoint</label>
-				{probed.initialized && <fieldset className="flex flex-col gap-1 text-xs">
-					<legend className="mb-1 text-foreground">This endpoint already holds progress from {probed.devices} device{probed.devices === 1 ? "" : "s"}. What about this device&apos;s own progress?</legend>
-					<label className="flex items-start gap-2"><input type="radio" name="join" checked={join === "merge"} onChange={() => setJoin("merge")} /> <span><strong>Merge it</strong> into the shared progress (recommended)</span></label>
-					<label className="flex items-start gap-2"><input type="radio" name="join" checked={join === "set-aside"} onChange={() => setJoin("set-aside")} /> <span><strong>Set it aside</strong> and use the shared progress. You can restore it later from this page.</span></label>
-				</fieldset>}
+				{pick && <SyncChooser syncs={probed.syncs} pick={pick} onPick={setPick} />}
 				<p className="text-xs text-muted-foreground">A full backup of this device&apos;s data is taken before the first sync.</p>
 				<span className="flex gap-1.5">
-					<button type="button" className={button} onClick={() => { setProbed(null); setTrusted(false); }}>Back</button>
-					<button type="button" className={primary} disabled={busy || !trusted} data-testid="sync-connect"
-						onClick={() => void run(async () => { await act("connect", { host, port, fingerprint: probed.fingerprint, ...(probed.initialized ? { join } : {}) }); setProbed(null); setTrusted(false); })}>Connect and sync</button>
+					<button type="button" className={button} onClick={() => { setProbed(null); setTrusted(false); setPick(null); }}>Back</button>
+					<button type="button" className={primary} disabled={busy || !trusted || !pick || !pickTarget(pick)} data-testid="sync-connect"
+						onClick={() => void run(async () => {
+							const target = pickTarget(pick!)!;
+							await act("connect", { host, port, fingerprint: probed.fingerprint, target, ...(target.kind === "join" ? { join: pick!.join } : {}) });
+							setProbed(null); setTrusted(false); setPick(null);
+						})}>Connect and sync</button>
 				</span>
 			</div> : <div className="flex flex-wrap items-center gap-1.5">
 				<input aria-label="Endpoint host or IP" placeholder="host or IP, e.g. 192.168.1.20" className={`${input} min-w-48 flex-1`} value={host} onChange={e => setHost(e.currentTarget.value)} />
 				<input aria-label="Port" className={`${input} w-16`} value={port} onChange={e => setPort(e.currentTarget.value)} inputMode="numeric" />
-				<button type="button" className={primary} disabled={busy || !host.trim()} onClick={() => void run(async () => setProbed(await probe(host.trim(), Number(port) || 22)))}>Check connection</button>
+				<button type="button" className={primary} disabled={busy || !host.trim()} onClick={() => void run(async () => { const result = await probe(host.trim(), Number(port) || 22); setProbed(result); setPick(initialPick(result.syncs, status.deviceName)); })}>Check connection</button>
 			</div>}
 		</SettingsGroup>}
 
@@ -226,7 +339,7 @@ export function DeviceSyncSection() {
 			))}
 		</SettingsGroup>}
 
-		{status.devices.length > 0 && <SettingsGroup label="Devices on this endpoint">
+		{status.devices.length > 0 && <SettingsGroup label={status.sync ? `Devices in “${status.sync.name}”` : "Devices in this sync"}>
 			{status.devices.map(d => (
 				<SettingsRow key={d.id} label={`${d.name}${d.self ? " (this device)" : ""}`} hint={`Last seen ${when(d.lastSeen)}`}><span /></SettingsRow>
 			))}
@@ -245,6 +358,8 @@ export function DeviceSyncSection() {
 		</SettingsGroup>}
 
 		{conflict && <ConflictDialog conflict={conflict} onClose={() => setConflict(null)} onDecide={async d => { await act("resolve", { id: conflict.id, decision: d }); }} />}
+		{changing && <ChangeSyncDialog status={status} listSyncs={listSyncs} onClose={() => setChanging(false)}
+			onConfirm={async (target, join) => { await act("change-sync", { target, ...(join ? { join } : {}) }); }} />}
 		{forgetting && <ForgetDialog publicKey={status.publicKey} onClose={() => setForgetting(false)} onConfirm={() => { setForgetting(false); void run(() => act("forget")); }} />}
 	</div>;
 }

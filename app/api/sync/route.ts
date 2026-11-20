@@ -1,7 +1,7 @@
 // Device Sync (owner design 2026-11-15): GET the status; POST one action.
 // Loopback-only like every route (the desktop server binds 127.0.0.1).
 import { deviceSync } from "@/src/server";
-import type { ConflictDecision, JoinChoice } from "@/src/core";
+import type { ConflictDecision, JoinChoice, SyncTarget } from "@/src/core";
 
 const HOST = /^[A-Za-z0-9.:\-[\]]{1,255}$/;
 
@@ -12,6 +12,15 @@ function endpointOf(body: Record<string, unknown>): { host: string; port: number
 	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("The port must be a number from 1 to 65535");
 	return { host, port };
 }
+
+/** Join an existing sync (by id) or create one (with a name). */
+function targetOf(value: unknown): SyncTarget {
+	const t = value as { kind?: unknown; id?: unknown; name?: unknown } | null;
+	if (t?.kind === "join" && typeof t.id === "string" && t.id.length <= 40) return { kind: "join", id: t.id };
+	if (t?.kind === "create" && typeof t.name === "string") return { kind: "create", name: t.name };
+	throw new Error("Choose a sync to join, or create one");
+}
+const joinOf = (value: unknown): JoinChoice | undefined => value === "merge" || value === "set-aside" ? value : undefined;
 
 export async function GET() {
 	return Response.json(deviceSync().status());
@@ -37,10 +46,21 @@ export async function POST(request: Request) {
 			case "connect": {
 				const { host, port } = endpointOf(body);
 				if (typeof body.fingerprint !== "string" || !body.fingerprint.startsWith("SHA256:")) throw new Error("Confirm the endpoint's fingerprint first");
-				const join = body.join === "merge" || body.join === "set-aside" ? body.join as JoinChoice : undefined;
-				await sync.connect({ host, port, fingerprint: body.fingerprint, ...(join ? { join } : {}) });
+				const join = joinOf(body.join);
+				await sync.connect({ host, port, fingerprint: body.fingerprint, target: targetOf(body.target), ...(join ? { join } : {}) });
 				break;
 			}
+			case "list-syncs":
+				return Response.json({ syncs: await sync.listSyncs() });
+			case "change-sync": {
+				const join = joinOf(body.join);
+				await sync.changeSync(targetOf(body.target), join);
+				break;
+			}
+			case "rename-sync":
+				if (typeof body.name !== "string") throw new Error("Give the sync a name");
+				await sync.renameSync(body.name);
+				break;
 			case "reconnect": {
 				const endpoint = sync.status().endpoint;
 				if (!endpoint) throw new Error("No endpoint to reconnect to");

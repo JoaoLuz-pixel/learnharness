@@ -1,15 +1,21 @@
 /**
  * DEVICE SYNC — the SSH endpoint (owner design 2026-11-15). Devices log in
  * as the dedicated SFTP-only `learnharness` user, chrooted to its home; the
- * writable folder is /sync. Layout:
+ * writable folder is /sync.
  *
- *   /sync/meta.json            format stamp + who created it
- *   /sync/manifest.json        rel → {hash, device, at} (the truth list)
- *   /sync/data/<rel>           synced files
- *   /sync/devices/<id>.json    device registry (name, lastSeen)
- *   /sync/locks/<chatId>.json  "session active on <device>" while a turn runs
- *   /sync/.cycle-lock          one writer at a time (exclusive create, TTL)
- *   /sync/tmp/                 write-then-rename staging
+ * SEVERAL SYNCS PER ENDPOINT (owner, 2026-11-20): each sync is one folder
+ * with the layout below. The FIRST sync ("main") is the original /sync
+ * itself, kept in place so devices on older versions keep syncing it; every
+ * other sync lives in /sync/syncs/<id>/. Syncs are organisational, not
+ * private: every device logs in as the same user (owner's choice).
+ *
+ *   <root>/meta.json            format stamp, name, who created it
+ *   <root>/manifest.json        rel → {hash, device, at} (the truth list)
+ *   <root>/data/<rel>           synced files
+ *   <root>/devices/<id>.json    device registry (name, lastSeen)
+ *   <root>/locks/<chatId>.json  "session active on <device>" while a turn runs
+ *   <root>/.cycle-lock          one writer at a time per sync (exclusive create, TTL)
+ *   /sync/tmp/                  write-then-rename staging (shared)
  *
  * Host keys are pinned (SHA256 fingerprint, OpenSSH format); a changed key
  * refuses the connection. Only the device's own private key authenticates.
@@ -23,6 +29,30 @@ import { emptyManifest, type Manifest, type RemoteSide } from "./engine.ts";
 export const SYNC_ROOT = "/sync";
 export const SYNC_USER = "learnharness";
 export const ENDPOINT_FORMAT = 1;
+/** The original sync, in /sync itself. */
+export const MAIN_SYNC_ID = "main";
+/** Its name when it predates names (endpoints set up before 2026-11-20). */
+export const MAIN_SYNC_DEFAULT_NAME = "Shared progress";
+const SYNC_ID = /^s_[a-z0-9]{8,32}$/;
+
+/** A sync id this app accepts: "main" or s_<8–32 lowercase alphanumerics>. */
+export function isSyncId(id: unknown): id is string {
+	return id === MAIN_SYNC_ID || (typeof id === "string" && SYNC_ID.test(id));
+}
+/** The folder a sync lives in on the endpoint. */
+export function syncRoot(id: string): string {
+	if (!isSyncId(id)) throw new Error(`Unknown sync ${String(id)}`);
+	return id === MAIN_SYNC_ID ? SYNC_ROOT : `${SYNC_ROOT}/syncs/${id}`;
+}
+export function newSyncId(): string {
+	return `s_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+/** Names are short plain text: trimmed, single-line, at most 60 characters. */
+export function cleanSyncName(name: unknown): string {
+	const clean = typeof name === "string" ? name.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) : "";
+	if (!clean) throw new Error("Give the sync a name");
+	return clean;
+}
 const CYCLE_LOCK_TTL_MS = 60_000;
 
 /** OpenSSH-style fingerprint: "SHA256:" + unpadded base64. */
@@ -39,7 +69,9 @@ export class HostKeyMismatchError extends Error {
 	constructor(readonly presented: string, readonly pinned: string) { super(`The endpoint's identity changed (expected ${pinned}, got ${presented}). Sync is blocked until you check it.`); }
 }
 
-export interface EndpointMeta { format: number; createdAt: string; createdBy: string }
+export interface EndpointMeta { format: number; createdAt: string; createdBy: string; name?: string }
+/** One sync as the chooser shows it. */
+export interface SyncSummary { id: string; name: string; createdAt: string; createdBy: string; devices: DeviceRecord[] }
 export interface DeviceRecord { id: string; name: string; lastSeen: string }
 export interface SessionLock { chatId: string; deviceId: string; deviceName: string; expiresAt: string }
 
@@ -57,6 +89,8 @@ const p = <T>(fn: (cb: (err: Error | null | undefined, value?: T) => void) => vo
 const noSuchFile = (err: unknown) => (err as { code?: number }).code === 2;
 
 export class SftpEndpoint implements RemoteSide {
+	/** The selected sync's folder; every sync operation below works in it. */
+	private root = SYNC_ROOT;
 	private constructor(private client: SshClient, private sftp: SFTPWrapper, readonly fingerprint: string) {}
 
 	static async connect(options: ConnectOptions): Promise<SftpEndpoint> {
@@ -81,12 +115,15 @@ export class SftpEndpoint implements RemoteSide {
 		return new SftpEndpoint(client, sftp, presented);
 	}
 
+	/** Work in this sync from now on. */
+	useSync(id: string): this { this.root = syncRoot(id); return this; }
+
 	close(): void { this.client.end(); }
 	onClose(listener: () => void): void { this.client.once("close", listener); }
 
 	private dataPath(rel: string): string {
 		if (rel.split("/").some(s => !s || s === "." || s === "..")) throw new Error(`Unsafe sync path ${rel}`);
-		return `${SYNC_ROOT}/data/${rel}`;
+		return `${this.root}/data/${rel}`;
 	}
 	private async readRaw(path: string): Promise<Buffer | null> {
 		try { return await p<Buffer>(cb => this.sftp.readFile(path, cb)); }
@@ -132,23 +169,51 @@ export class SftpEndpoint implements RemoteSide {
 	write(rel: string, bytes: Buffer) { return this.writeRaw(this.dataPath(rel), bytes); }
 	remove(rel: string) { return this.removeRaw(this.dataPath(rel)); }
 
-	async readMeta(): Promise<EndpointMeta | null> { return this.readJson<EndpointMeta>(`${SYNC_ROOT}/meta.json`); }
-	async initialize(createdBy: string): Promise<void> {
-		await this.writeJson(`${SYNC_ROOT}/meta.json`, { format: ENDPOINT_FORMAT, createdAt: new Date().toISOString(), createdBy } satisfies EndpointMeta);
-		await this.writeJson(`${SYNC_ROOT}/manifest.json`, emptyManifest());
+	async readMeta(): Promise<EndpointMeta | null> { return this.readJson<EndpointMeta>(`${this.root}/meta.json`); }
+	/** Create the selected sync (empty manifest). `name` is stored in meta. */
+	async initialize(createdBy: string, name?: string): Promise<void> {
+		await this.writeJson(`${this.root}/meta.json`, { format: ENDPOINT_FORMAT, createdAt: new Date().toISOString(), createdBy, ...(name ? { name: cleanSyncName(name) } : {}) } satisfies EndpointMeta);
+		await this.writeJson(`${this.root}/manifest.json`, emptyManifest());
+	}
+	/** Make the selected sync's folder (before creating it: its cycle lock
+	 *  lives there). Never called for an existing sync, so a removed one
+	 *  is not brought back as an empty folder. */
+	ensureSyncFolder() { return this.mkdirp(this.root); }
+	/** Rename the selected sync (any device in it may). */
+	async renameSync(name: string): Promise<void> {
+		const meta = await this.readMeta();
+		if (!meta) throw new Error("This sync no longer exists on the endpoint");
+		await this.writeJson(`${this.root}/meta.json`, { ...meta, name: cleanSyncName(name) });
+	}
+	/** Every sync on the endpoint, with its paired devices. Read-only. */
+	async listSyncs(): Promise<SyncSummary[]> {
+		const ids = [MAIN_SYNC_ID, ...(await this.listDir(`${SYNC_ROOT}/syncs`)).filter(name => SYNC_ID.test(name)).sort()];
+		const out: SyncSummary[] = [];
+		const selected = this.root;
+		try {
+			for (const id of ids) {
+				this.root = syncRoot(id);
+				const meta = await this.readMeta();
+				if (!meta) continue; // not a sync (main unused, or a half-created folder)
+				out.push({ id, name: meta.name ?? (id === MAIN_SYNC_ID ? MAIN_SYNC_DEFAULT_NAME : id), createdAt: meta.createdAt, createdBy: meta.createdBy, devices: await this.listDevices() });
+			}
+		} finally { this.root = selected; }
+		return out;
 	}
 	async readManifest(): Promise<Manifest> {
-		const manifest = await this.readJson<Manifest>(`${SYNC_ROOT}/manifest.json`);
+		const manifest = await this.readJson<Manifest>(`${this.root}/manifest.json`);
 		return manifest && manifest.version === 1 && manifest.files && typeof manifest.files === "object" ? manifest : emptyManifest();
 	}
-	writeManifest(manifest: Manifest) { return this.writeJson(`${SYNC_ROOT}/manifest.json`, manifest); }
+	writeManifest(manifest: Manifest) { return this.writeJson(`${this.root}/manifest.json`, manifest); }
 
-	async registerDevice(record: DeviceRecord): Promise<void> { await this.writeJson(`${SYNC_ROOT}/devices/${record.id}.json`, record); }
+	async registerDevice(record: DeviceRecord): Promise<void> { await this.writeJson(`${this.root}/devices/${record.id}.json`, record); }
+	/** Leave the selected sync's device list (Change sync). */
+	unregisterDevice(deviceId: string) { return this.removeRaw(`${this.root}/devices/${deviceId}.json`); }
 	async listDevices(): Promise<DeviceRecord[]> {
 		const out: DeviceRecord[] = [];
-		for (const name of await this.listDir(`${SYNC_ROOT}/devices`)) {
+		for (const name of await this.listDir(`${this.root}/devices`)) {
 			if (!name.endsWith(".json")) continue;
-			const record = await this.readJson<DeviceRecord>(`${SYNC_ROOT}/devices/${name}`);
+			const record = await this.readJson<DeviceRecord>(`${this.root}/devices/${name}`);
 			if (record && typeof record.id === "string" && typeof record.name === "string") out.push(record);
 		}
 		return out;
@@ -157,7 +222,7 @@ export class SftpEndpoint implements RemoteSide {
 	/** One writer at a time. Exclusive create; a lock older than its TTL is
 	 *  a crashed device's and may be taken over. Returns false when busy. */
 	async acquireCycleLock(deviceId: string): Promise<boolean> {
-		const path = `${SYNC_ROOT}/.cycle-lock`;
+		const path = `${this.root}/.cycle-lock`;
 		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
 				const handle = await p<Buffer>(cb => this.sftp.open(path, "wx", cb));
@@ -173,14 +238,14 @@ export class SftpEndpoint implements RemoteSide {
 		}
 		return false;
 	}
-	releaseCycleLock() { return this.removeRaw(`${SYNC_ROOT}/.cycle-lock`); }
+	releaseCycleLock() { return this.removeRaw(`${this.root}/.cycle-lock`); }
 
-	async writeSessionLock(lock: SessionLock): Promise<void> { await this.writeJson(`${SYNC_ROOT}/locks/${lock.chatId}.json`, lock); }
-	removeSessionLock(chatId: string) { return this.removeRaw(`${SYNC_ROOT}/locks/${chatId}.json`); }
+	async writeSessionLock(lock: SessionLock): Promise<void> { await this.writeJson(`${this.root}/locks/${lock.chatId}.json`, lock); }
+	removeSessionLock(chatId: string) { return this.removeRaw(`${this.root}/locks/${chatId}.json`); }
 	async listSessionLocks(): Promise<SessionLock[]> {
 		const out: SessionLock[] = [];
-		for (const name of await this.listDir(`${SYNC_ROOT}/locks`)) {
-			const lock = name.endsWith(".json") ? await this.readJson<SessionLock>(`${SYNC_ROOT}/locks/${name}`) : null;
+		for (const name of await this.listDir(`${this.root}/locks`)) {
+			const lock = name.endsWith(".json") ? await this.readJson<SessionLock>(`${this.root}/locks/${name}`) : null;
 			if (lock && typeof lock.chatId === "string" && typeof lock.expiresAt === "string") out.push(lock);
 		}
 		return out;

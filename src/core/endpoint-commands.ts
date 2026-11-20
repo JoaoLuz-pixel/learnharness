@@ -106,3 +106,24 @@ export function endpointCommands(os: EndpointOs, publicKey: string): EndpointCom
 		removeDevice: { title: "Revoke this device", note: "Run on the endpoint to cut this device off for good.", code: `sudo sed -i${mac ? " ''" : ""} '\\#${blob}#d' ${keys}` },
 	};
 }
+
+/** The folders and files the first sync ("main") keeps directly in /sync. */
+const MAIN_SYNC_ENTRIES = ["meta.json", "manifest.json", "data", "devices", "locks", ".cycle-lock"];
+
+/**
+ * Remove a sync nobody uses any more, by hand on the endpoint (owner,
+ * 2026-11-20: the app never deletes a sync). Its devices' own progress is
+ * untouched; they simply have no sync until they pick another.
+ */
+export function removeSyncCommand(os: EndpointOs, syncId: string): CommandStep {
+	if (syncId !== "main" && !/^s_[a-z0-9]{8,32}$/.test(syncId)) throw new Error("Unknown sync id");
+	const note = "Run on the endpoint as an administrator, and only once every device has left this sync (Change sync or Forget). A device still in it stops syncing and asks for another sync; one on an older app version, from before several syncs, could lose its local copy.";
+	if (os === "windows") {
+		const base = "C:\\LearnHarnessSync\\sync";
+		const targets = syncId === "main" ? MAIN_SYNC_ENTRIES.map(e => `${base}\\${e}`) : [`${base}\\syncs\\${syncId}`];
+		return { title: "Remove this sync from the endpoint", note, code: `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ${targets.map(t => `'${t}'`).join(", ")}` };
+	}
+	const base = `${os === "macos" ? "/var/learnharness" : "/srv/learnharness"}/sync`;
+	const targets = syncId === "main" ? MAIN_SYNC_ENTRIES.map(e => `${base}/${e}`) : [`${base}/syncs/${syncId}`];
+	return { title: "Remove this sync from the endpoint", note, code: `sudo rm -rf ${targets.join(" ")}` };
+}

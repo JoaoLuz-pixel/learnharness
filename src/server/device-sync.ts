@@ -15,13 +15,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS, SYNC_DIR } from "../../config.ts";
 import { emit, subscribe } from "../core/events.ts";
-import type { ConflictDecision, DeviceSyncStatus, JoinChoice, SetAsideView, SyncConflictView, SyncInterval, SyncLockView, SyncPhase, SyncProbeResult, SyncToggleState } from "../core/device-sync.ts";
+import type { ConflictDecision, DeviceSyncStatus, JoinChoice, SetAsideView, SyncChoiceView, SyncConflictView, SyncInterval, SyncLockView, SyncPhase, SyncProbeResult, SyncTarget, SyncToggleState } from "../core/device-sync.ts";
 import { SYNC_INTERVALS } from "../core/device-sync.ts";
 import { resolveConflict, runSyncCycle, type Manifest, type SyncConflict } from "../sync/engine.ts";
 import { FsBaseSide, FsLocalSide, listSnapshot, snapshotDataDir } from "../sync/local-fs.ts";
 import { ledgerLineId, mergeLedger } from "../sync/merge.ts";
 import { DEFAULT_SYNC_TOGGLES, classifySyncPath } from "../sync/scope.ts";
-import { generateDeviceKey, HostKeyMismatchError, SftpEndpoint, type DeviceRecord, type SessionLock } from "../sync/sftp.ts";
+import { cleanSyncName, generateDeviceKey, HostKeyMismatchError, isSyncId, MAIN_SYNC_DEFAULT_NAME, MAIN_SYNC_ID, newSyncId, SftpEndpoint, type DeviceRecord, type SessionLock, type SyncSummary } from "../sync/sftp.ts";
 import { writeFileAtomicSync } from "../store/atomic-write.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 
@@ -33,12 +33,22 @@ interface SyncState {
 	toggles: SyncToggleState;
 	intervalSec: SyncInterval;
 	endpoint: { host: string; port: number; fingerprint: string } | null;
+	/** The sync this device belongs to on the endpoint (several may exist,
+	 *  owner 2026-11-20). Devices set up before then are in "main". */
+	syncId: string | null;
+	/** Its last-known name, for display while offline. */
+	syncName: string | null;
 	enabled: boolean;
 	/** This device completed its first sync with the current endpoint. */
 	joined: boolean;
 	conflicts: StoredConflict[];
 	setAside: SetAsideView[];
 	lastSyncAt: string | null;
+}
+
+/** The sync this device is in no longer exists on the endpoint. */
+class SyncRemovedError extends Error {
+	constructor() { super("This sync was removed from the endpoint. Use Change sync to pick another one; nothing on this device was changed."); }
 }
 
 const STATE_FILE = () => path.join(SYNC_DIR, "state.json");
@@ -49,13 +59,15 @@ const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
 function defaultState(): SyncState {
 	return { version: 1, deviceId: `dev_${randomUUID().slice(0, 12)}`, deviceName: os.hostname() || "This device", toggles: { ...DEFAULT_SYNC_TOGGLES },
-		intervalSec: 10, endpoint: null, enabled: false, joined: false, conflicts: [], setAside: [], lastSyncAt: null };
+		intervalSec: 10, endpoint: null, syncId: null, syncName: null, enabled: false, joined: false, conflicts: [], setAside: [], lastSyncAt: null };
 }
 function loadState(): SyncState {
 	try {
 		const value = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8")) as Partial<SyncState>;
 		if (value.version !== 1 || typeof value.deviceId !== "string") return defaultState();
 		const base = defaultState();
+		// Before several syncs existed, a configured endpoint meant its one sync: "main".
+		if (value.syncId === undefined || !isSyncId(value.syncId)) value.syncId = value.endpoint ? MAIN_SYNC_ID : null;
 		return { ...base, ...value, toggles: { ...base.toggles, ...value.toggles }, intervalSec: SYNC_INTERVALS.includes(value.intervalSec as SyncInterval) ? value.intervalSec as SyncInterval : 10 } as SyncState;
 	} catch { return defaultState(); }
 }
@@ -95,6 +107,8 @@ class DeviceSyncService {
 	private local = new FsLocalSide(PATHS.data, () => this.state.toggles);
 	private base = new FsBaseSide(BASE_DIR());
 	private pendingJoin: JoinChoice | null = null;
+	/** A sync to create on the first cycle after Connect / Change sync. */
+	private pendingCreate: { name: string } | null = null;
 
 	constructor() {
 		subscribe((event) => {
@@ -134,7 +148,9 @@ class DeviceSyncService {
 		const now = Date.now();
 		return {
 			phase: this.phase, deviceId: this.state.deviceId, deviceName: this.state.deviceName, publicKey: this.publicKey(),
-			endpoint: this.state.endpoint, enabled: this.state.enabled, toggles: this.state.toggles, intervalSec: this.state.intervalSec,
+			endpoint: this.state.endpoint,
+			sync: this.state.syncId ? { id: this.state.syncId, name: this.state.syncName ?? (this.state.syncId === MAIN_SYNC_ID ? MAIN_SYNC_DEFAULT_NAME : this.state.syncId) } : null,
+			enabled: this.state.enabled, toggles: this.state.toggles, intervalSec: this.state.intervalSec,
 			lastSyncAt: this.state.lastSyncAt, lastError: this.lastError,
 			conflicts: this.state.conflicts.map(c => ({ id: c.id, label: c.label, kind: c.kind, ...(c.deletedOn ? { deletedOn: c.deletedOn } : {}),
 				...(c.remoteDevice ? { remoteDevice: c.remoteDevice } : {}), ...(c.remoteAt ? { remoteAt: c.remoteAt } : {}),
@@ -168,18 +184,46 @@ class DeviceSyncService {
 	}
 
 	/* ── connecting ── */
-	/** First contact: learn the endpoint's identity without trusting it yet. */
+	/** First contact: learn the endpoint's identity and its syncs without
+	 *  trusting it yet (nothing is written). */
 	async probe(host: string, port: number): Promise<SyncProbeResult> {
 		const endpoint = await SftpEndpoint.connect({ host, port, privateKey: this.privateKey() });
 		try {
-			const meta = await endpoint.readMeta();
-			return { fingerprint: endpoint.fingerprint, initialized: !!meta, devices: (await endpoint.listDevices()).length };
+			return { fingerprint: endpoint.fingerprint, syncs: choiceViews(await endpoint.listSyncs()) };
 		} finally { endpoint.close(); }
 	}
+	/** The syncs on the configured endpoint (Change sync's chooser). */
+	async listSyncs(): Promise<SyncChoiceView[]> {
+		const endpoint = await this.open();
+		return choiceViews(await endpoint.listSyncs());
+	}
 
-	async connect(options: { host: string; port: number; fingerprint: string; join?: JoinChoice }): Promise<void> {
+	/** Check a target against what the endpoint holds right now. */
+	private async resolveTarget(endpoint: SftpEndpoint, target: SyncTarget): Promise<{ syncId: string; create: { name: string } | null; name: string }> {
+		const syncs = await endpoint.listSyncs();
+		if (target.kind === "join") {
+			const found = syncs.find(sync => sync.id === target.id);
+			if (!found) throw new Error("That sync is no longer on the endpoint. Check the endpoint again and pick another.");
+			return { syncId: found.id, create: null, name: found.name };
+		}
+		const name = cleanSyncName(target.name);
+		// The endpoint's first sync goes in /sync itself, where devices on
+		// older versions look for it.
+		return { syncId: syncs.some(sync => sync.id === MAIN_SYNC_ID) ? newSyncId() : MAIN_SYNC_ID, create: { name }, name };
+	}
+
+	async connect(options: { host: string; port: number; fingerprint: string; target?: SyncTarget; join?: JoinChoice }): Promise<void> {
 		const sameEndpoint = this.state.endpoint?.host === options.host && this.state.endpoint.port === options.port && this.state.endpoint.fingerprint === options.fingerprint;
-		if (!sameEndpoint) { this.base.clear(); this.state.joined = false; this.state.conflicts = []; }
+		if (!sameEndpoint || options.target) {
+			if (!options.target) throw new Error("Choose a sync to join, or create one");
+			const probe = await SftpEndpoint.connect({ host: options.host, port: options.port, privateKey: this.privateKey(), pinned: options.fingerprint });
+			let resolved: Awaited<ReturnType<DeviceSyncService["resolveTarget"]>>;
+			try { resolved = await this.resolveTarget(probe, options.target); } finally { probe.close(); }
+			await this.quiesce();
+			this.base.clear(); this.state.joined = false; this.state.conflicts = [];
+			this.state.syncId = resolved.syncId; this.state.syncName = resolved.name;
+			this.pendingCreate = resolved.create;
+		}
 		this.state.endpoint = { host: options.host, port: options.port, fingerprint: options.fingerprint };
 		this.pendingJoin = options.join ?? null;
 		this.state.enabled = true;
@@ -188,6 +232,51 @@ class DeviceSyncService {
 		await this.cycleNow();
 		if (this.lastError) throw new Error(this.lastError);
 		this.start();
+	}
+
+	/**
+	 * Change sync (owner, 2026-11-20): move this device to another sync on the
+	 * same endpoint, or create a new one, keeping its key. Its current
+	 * progress merges into the chosen sync or is set aside (join), or starts
+	 * the new sync (create). The sync it leaves keeps its data.
+	 */
+	async changeSync(target: SyncTarget, join?: JoinChoice): Promise<void> {
+		const endpoint = this.state.endpoint;
+		if (!endpoint) throw new Error("Connect to an endpoint first");
+		if (target.kind === "join" && target.id === this.state.syncId) throw new Error("This device is already in that sync");
+		// Finish any cycle first: one still running would re-register this
+		// device in the sync it is leaving, right after the removal below.
+		await this.quiesce();
+		if (this.state.syncId) {
+			try {
+				const current = await this.open();
+				await current.unregisterDevice(this.state.deviceId);
+			} catch { /* offline: the old sync just shows this device as last seen earlier */ }
+		}
+		for (const chatId of [...this.heartbeats.keys()]) await this.unlockSession(chatId);
+		await this.connect({ ...endpoint, target, ...(join ? { join } : {}) });
+	}
+
+	/** Stop syncing and let a cycle already under way finish on its own
+	 *  connection first: closing that connection under it would leave its
+	 *  SFTP calls waiting forever (and the old sync's lock held). */
+	private async quiesce(): Promise<void> {
+		const wasEnabled = this.state.enabled;
+		this.state.enabled = false; // no new cycle gets scheduled meanwhile
+		if (this.debounce) { clearTimeout(this.debounce); this.debounce = null; }
+		if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+		await this.cycling?.catch(() => undefined);
+		this.stop();
+		this.state.enabled = wasEnabled;
+	}
+
+	/** Rename the sync this device is in (any device in it may). */
+	async renameSync(name: string): Promise<void> {
+		const clean = cleanSyncName(name);
+		const endpoint = await this.open();
+		await endpoint.renameSync(clean);
+		this.state.syncName = clean;
+		this.save(); this.changed();
 	}
 
 	disconnect(): void {
@@ -201,7 +290,8 @@ class DeviceSyncService {
 		this.stop();
 		for (const file of [KEY_FILE(), `${KEY_FILE()}.pub`]) { try { fs.unlinkSync(file); } catch { /* absent */ } }
 		this.base.clear();
-		Object.assign(this.state, { endpoint: null, enabled: false, joined: false, conflicts: [], lastSyncAt: null });
+		Object.assign(this.state, { endpoint: null, syncId: null, syncName: null, enabled: false, joined: false, conflicts: [], lastSyncAt: null });
+		this.pendingCreate = null; this.pendingJoin = null;
 		this.devices = []; this.remoteLocks = [];
 		this.save();
 		this.setPhase("off", null);
@@ -213,7 +303,7 @@ class DeviceSyncService {
 		if (!target) throw new Error("No endpoint configured");
 		this.setPhase("connecting");
 		try {
-			const endpoint = await SftpEndpoint.connect({ host: target.host, port: target.port, privateKey: this.privateKey(), pinned: target.fingerprint });
+			const endpoint = (await SftpEndpoint.connect({ host: target.host, port: target.port, privateKey: this.privateKey(), pinned: target.fingerprint })).useSync(this.state.syncId ?? MAIN_SYNC_ID);
 			endpoint.onClose(() => { if (this.endpoint === endpoint) { this.endpoint = null; if (this.state.enabled) { this.setPhase("offline"); this.schedule(this.backoff()); } } });
 			this.endpoint = endpoint;
 			this.failures = 0;
@@ -272,14 +362,23 @@ class DeviceSyncService {
 		this.setPhase("syncing", null);
 		let locked = false;
 		try {
+			// A sync removed from the endpoint reads as an empty file list: syncing
+			// against it would delete this device's own copy. Stop instead (read-only
+			// check before the lock: a removed sync has no folder to lock in).
+			if (this.state.joined && !this.pendingCreate && !await endpoint.readMeta()) throw new SyncRemovedError();
+			if (this.pendingCreate) await endpoint.ensureSyncFolder();
 			for (let attempt = 0; attempt < 5 && !(locked = await endpoint.acquireCycleLock(this.state.deviceId)); attempt++) await new Promise(r => setTimeout(r, 1_500));
 			if (!locked) { this.setPhase("in-sync"); return; } // another device is writing; the next cycle retries
 			const meta = await endpoint.readMeta();
+			if (this.state.joined && !meta) throw new SyncRemovedError();
 			if (!this.state.joined) {
 				// Every first sync with an endpoint starts from a full local backup.
 				const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 				snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "backups", stamp));
-				if (!meta) await endpoint.initialize(this.state.deviceName);
+				if (this.pendingCreate) {
+					if (meta) throw new Error("A sync already exists there. Check the endpoint again and pick it, or create another.");
+					await endpoint.initialize(this.state.deviceName, this.pendingCreate.name);
+				} else if (!meta) throw new Error("This sync is no longer on the endpoint. Use Change sync to pick another.");
 				else if (this.pendingJoin === "set-aside") {
 					const files = snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "set-aside", stamp), { move: true });
 					this.state.setAside.push({ id: stamp, createdAt: new Date().toISOString(), files });
@@ -294,13 +393,20 @@ class DeviceSyncService {
 			await endpoint.registerDevice({ id: this.state.deviceId, name: this.state.deviceName, lastSeen: new Date().toISOString() });
 			this.devices = await endpoint.listDevices();
 			this.remoteLocks = await endpoint.listSessionLocks();
-			this.state.joined = true; this.pendingJoin = null;
+			const current = this.pendingCreate ? null : meta;
+			if (current) this.state.syncName = current.name ?? (this.state.syncId === MAIN_SYNC_ID ? MAIN_SYNC_DEFAULT_NAME : this.state.syncName);
+			this.state.joined = true; this.pendingJoin = null; this.pendingCreate = null;
 			this.state.lastSyncAt = new Date().toISOString();
 			this.save();
 			this.announce([...result.pulled, ...result.deletedLocal]);
 			this.setPhase("in-sync", null);
 		} catch (err) {
 			if (err instanceof HostKeyMismatchError) return;
+			if (err instanceof SyncRemovedError) {
+				this.state.enabled = false; this.save();
+				this.setPhase("off", err.message);
+				return;
+			}
 			this.endpoint?.close(); this.endpoint = null; this.failures++;
 			this.setPhase("offline", err instanceof Error ? err.message : String(err));
 			this.schedule(this.backoff());
@@ -416,6 +522,11 @@ class DeviceSyncService {
 		this.heartbeats.delete(chatId);
 		await this.endpoint?.removeSessionLock(chatId).catch(() => undefined);
 	}
+}
+
+function choiceViews(syncs: SyncSummary[]): SyncChoiceView[] {
+	return syncs.map(sync => ({ id: sync.id, name: sync.name, createdAt: sync.createdAt, createdBy: sync.createdBy,
+		devices: sync.devices.map(d => ({ id: d.id, name: d.name, lastSeen: d.lastSeen })) }));
 }
 
 /** One service per server process (globalThis: every Next module entry shares it). */

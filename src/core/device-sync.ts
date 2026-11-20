@@ -28,6 +28,16 @@ export interface SyncConflictView {
 }
 
 export interface SyncDeviceView { id: string; name: string; lastSeen: string; self: boolean }
+/** One sync on the endpoint, as the chooser lists it (owner, 2026-11-20). */
+export interface SyncChoiceView {
+	id: string;
+	name: string;
+	createdAt: string;
+	createdBy: string;
+	devices: { id: string; name: string; lastSeen: string }[];
+}
+/** Which sync a device goes to: an existing one, or a new one it names. */
+export type SyncTarget = { kind: "join"; id: string } | { kind: "create"; name: string };
 export interface SyncLockView { chatId: string; deviceName: string; expiresAt: string }
 export interface SetAsideView { id: string; createdAt: string; files: number }
 
@@ -37,6 +47,8 @@ export interface DeviceSyncStatus {
 	deviceName: string;
 	publicKey: string | null;
 	endpoint: { host: string; port: number; fingerprint: string } | null;
+	/** The sync this device belongs to on that endpoint (several may exist). */
+	sync: { id: string; name: string } | null;
 	/** The learner wants sync on (Disconnect clears it; the key stays). */
 	enabled: boolean;
 	toggles: SyncToggleState;
@@ -53,9 +65,8 @@ export interface DeviceSyncStatus {
 /** First contact with an endpoint, before anything is trusted or written. */
 export interface SyncProbeResult {
 	fingerprint: string;
-	/** The endpoint already holds progress → the one-time join choice applies. */
-	initialized: boolean;
-	devices: number;
+	/** Every sync on the endpoint; empty = this device creates the first one. */
+	syncs: SyncChoiceView[];
 }
 
 export type JoinChoice = "merge" | "set-aside";
