@@ -29,6 +29,9 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-17 | [`cd9a957`](https://github.com/JoaoLuz-pixel/learnharness/commit/cd9a957) | Native Windows ARM64 installer in builds and releases, with one merged Windows update feed. |
 | 2026-11-17 | (release setup) | Fork release setup: the fork's builds update from the fork's releases; unsigned macOS packaging for forks; release notes with this notice; the fork's download page (`site/`); this `NOTICE.md`; README fork notice. Version 0.6.4. |
 | 2026-11-18 | (release fixes) | The app's "Release notes" link (Settings → Version) opens this fork's releases, the repo the build updates from; README bug-report links point to this fork's Issues, with the original project's Issues kept for the official app. |
+| 2026-11-20 | [`4df9218`](https://github.com/JoaoLuz-pixel/learnharness/commit/4df9218) | Several syncs on one Device Sync endpoint: a connecting device sees every sync and its devices, joins one or creates its own, and can change sync later; the original sync stays in place; a removed sync stops syncing instead of deleting local data. Slightly wider Settings window. |
+| 2026-11-21 | [`bc2582c`](https://github.com/JoaoLuz-pixel/learnharness/commit/bc2582c) | Install community plugins from a ready-built .zip (button or drop) with a confirmation and optional enable; duplicates refused; version shown per plugin; updates from a plugin's GitHub releases via an optional manifest `repository` field; manual details under "Advanced". |
+| 2026-11-21 | (release) | Version 0.6.5. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 
