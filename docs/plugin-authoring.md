@@ -184,6 +184,30 @@ that release, named after the plugin ID (e.g. `my-plugin-1.2.3.zip`); a release 
 single `.zip` asset also works. Updating replaces `dist/` and keeps `data/`; the manifest
 `id` must match and its `version` must be higher. Already-loaded code still needs a restart.
 
+### Uninstalling, and the uninstall trigger
+
+In apps that have it, each Community plugin has an **Uninstall** button. It deletes the
+plugin's whole folder, code **and** `data/` (a development folder's git history too).
+Just before that, the app sends the plugin an **uninstall trigger**:
+
+```js
+exports.activate = (ctx) => {
+  ctx.onUninstall?.(async ({ signal }) => {
+    await exportOrRevokeSomething(ctx.dataDirectory, signal); // data/ still exists here
+    // return { cancel: "Export your decks first." }; // to stop the uninstall
+  });
+};
+```
+
+- It runs **only** for an uninstall: never on disable, restart or update.
+- A switched-off plugin's backend is activated briefly just for it, then deactivated.
+- Returning `{ cancel: "reason" }` stops the uninstall; nothing is deleted and the reason
+  is shown to the learner. Returning nothing lets it continue.
+- A handler that throws or runs past **30 s** (its `signal` aborts) does not block the
+  uninstall, which continues and notes it. Keep the handler short and idempotent.
+- Older apps have no `onUninstall`: always call it as `ctx.onUninstall?.(…)`.
+  Frontend-only plugins receive no trigger.
+
 ### Install a prebuilt package
 
 Copy/extract the plugin so its built files occupy

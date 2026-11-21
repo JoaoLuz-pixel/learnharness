@@ -464,3 +464,59 @@ test("document conversion preserves ordinary conversion errors and host disposal
 	await f.host.dispose(); assert.equal(captured.aborted, true);
 	pending.resolve(documentResult); await rejected;
 });
+
+// ── Uninstall trigger (owner, 2026-11-21) ──
+const calls = () => ((globalThis as Record<string, unknown>).__lhUninstallCalls ??= []) as string[];
+const recorder = (answer: string) => `exports.activate = ctx => { ctx.onUninstall(async ({ signal }) => { globalThis.__lhUninstallCalls = (globalThis.__lhUninstallCalls || []).concat(ctx.manifest.id); ${answer} }); };`;
+
+test("uninstall trigger: an enabled plugin's handler runs before deletion and may let it proceed", async t => {
+	const f = fixture(t);
+	f.plugin("uninstall-ok", {}, recorder("return undefined;"));
+	await f.host.initialize(); await f.host.setEnabled("uninstall-ok", true);
+	const result = await f.host.prepareUninstall("uninstall-ok");
+	assert.deepEqual(result, { notes: [], ran: 1 });
+	assert.ok(calls().includes("uninstall-ok"));
+	assert.equal(f.host.list().find(p => p.id === "uninstall-ok")?.status, "active", "the trigger alone changes nothing");
+});
+
+test("uninstall trigger: a plugin may stop the uninstall with a reason", async t => {
+	const f = fixture(t);
+	f.plugin("uninstall-stop", {}, recorder("return { cancel: 'Export your decks first.' };"));
+	await f.host.initialize(); await f.host.setEnabled("uninstall-stop", true);
+	assert.deepEqual(await f.host.prepareUninstall("uninstall-stop"), { cancelled: "Export your decks first.", notes: [], ran: 1 });
+});
+
+test("uninstall trigger: a failing or slow handler never blocks the uninstall", async t => {
+	const f = fixture(t);
+	f.plugin("uninstall-throws", {}, recorder("throw new Error('boom');"));
+	f.plugin("uninstall-slow", {}, recorder("await new Promise(() => {});"));
+	await f.host.initialize();
+	await f.host.setEnabled("uninstall-throws", true); await f.host.setEnabled("uninstall-slow", true);
+	const thrown = await f.host.prepareUninstall("uninstall-throws");
+	assert.equal(thrown.cancelled, undefined); assert.match(thrown.notes[0]!, /failed: boom/);
+	const slow = await f.host.prepareUninstall("uninstall-slow", 50);
+	assert.equal(slow.cancelled, undefined); assert.match(slow.notes[0]!, /took longer than/);
+});
+
+test("uninstall trigger: a switched-off plugin is started briefly, then stopped again; disabling never fires it", async t => {
+	const f = fixture(t);
+	f.plugin("uninstall-off", {}, recorder("return undefined;"));
+	await f.host.initialize();
+	await f.host.setEnabled("uninstall-off", true); await f.host.setEnabled("uninstall-off", false);
+	assert.equal(calls().filter(id => id === "uninstall-off").length, 0, "switching off is not uninstalling");
+	const result = await f.host.prepareUninstall("uninstall-off");
+	assert.equal(result.ran, 1);
+	assert.equal(calls().filter(id => id === "uninstall-off").length, 1);
+	const info = f.host.list().find(p => p.id === "uninstall-off")!;
+	assert.equal(info.enabled, false); assert.equal(info.status, "disabled", "back to off after the trigger");
+	assert.ok(f.history.includes("agents"), "the brief activation was cleaned up");
+});
+
+test("uninstall trigger: plugins without a backend have nothing to run", async t => {
+	const f = fixture(t);
+	const dir = path.join(f.directory, "frontend-only", "dist"); fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ apiVersion: 1, id: "frontend-only", name: "F", version: "1.0.0", minAppVersion: "0.3.0", main: "main.js" }));
+	fs.writeFileSync(path.join(dir, "main.js"), "export function activate() {}");
+	await f.host.initialize();
+	assert.deepEqual(await f.host.prepareUninstall("frontend-only"), { notes: [], ran: 0 });
+});

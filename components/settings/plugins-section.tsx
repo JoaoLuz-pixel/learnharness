@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { RefreshCw, Settings, Upload } from "lucide-react";
+import { RefreshCw, Settings, Trash2, Upload } from "lucide-react";
 import { usePlugins } from "@/components/plugins";
 import type { FrontendPlugin } from "@/components/plugin-manager";
 import { HostDialog } from "@/components/host-dialog";
@@ -15,6 +15,9 @@ export interface PluginZipSummary {
 	id: string; name: string; version: string; minAppVersion: string;
 	author?: string; description?: string; repository?: string; frontend: boolean; backend: boolean;
 }
+/** What uninstalling removes (app/api/plugin-uninstall GET). */
+export interface PluginFolderView { id: string; kind: "package" | "development"; link: boolean; remote?: string; path: string }
+
 export interface PluginUpdateView { id: string; current: string; repository: string; latest?: string; available: boolean; error?: string }
 
 async function postZip(file: File, mode: "inspect" | "install"): Promise<PluginZipSummary> {
@@ -183,6 +186,7 @@ function PluginRow({ plugin, update, onSettings, onUpdated }: { plugin: Frontend
 	const name = info.manifest?.name ?? info.id;
 	const [updating, setUpdating] = useState(false);
 	const [updateError, setUpdateError] = useState("");
+	const [uninstalling, setUninstalling] = useState(false);
 	const runUpdate = async () => {
 		if (!update?.latest || !window.confirm(`Update ${name} from v${update.current} to v${update.latest}? Its saved data is kept.`)) return;
 		setUpdating(true); setUpdateError("");
@@ -204,8 +208,14 @@ function PluginRow({ plugin, update, onSettings, onUpdated }: { plugin: Frontend
 					className="flex size-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					onClick={onSettings}><Settings className="size-3.5" aria-hidden="true" /></button>}
 				<Toggle label={`Enable ${name}`} checked={info.enabled} disabled={!manager || plugin.busy || snapshot.refreshing || (!info.manifest && !info.enabled)} onChange={enabled => void manager?.setEnabled(info.id, enabled)} />
+				{info.origin === "community" && <button type="button" aria-label={`Uninstall ${name}`} title={`Uninstall ${name}`} data-testid="plugin-uninstall"
+					disabled={!manager || plugin.busy || snapshot.refreshing}
+					className="flex size-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+					onClick={() => setUninstalling(true)}><Trash2 className="size-3.5" aria-hidden="true" /></button>}
 			</div>
 		</SettingsRow>
+		{uninstalling && <UninstallDialog id={info.id} name={name} version={info.manifest?.version} enabled={info.enabled} backend={!!info.manifest?.backend}
+			onClose={() => setUninstalling(false)} onDone={(text) => { setUninstalling(false); onUpdated(text); }} />}
 		{info.manifest?.description && <p className="mt-1 font-prose text-sm text-muted-foreground">{info.manifest.description}</p>}
 		{update?.available && <div data-testid="plugin-update" className="mt-2 flex flex-wrap items-center gap-2 text-xs">
 			<span className="text-foreground">Update available: v{update.latest}</span>
@@ -215,4 +225,61 @@ function PluginRow({ plugin, update, onSettings, onUpdated }: { plugin: Frontend
 		{updateError && <p role="alert" className="mt-1 break-words text-xs text-destructive">{updateError}</p>}
 		{plugin.error && <p role="alert" className="mt-2 break-words text-xs text-destructive">{plugin.error}</p>}
 	</div>;
+}
+
+/** The uninstall confirmation: always deletes code AND data (owner's choice);
+ *  a development folder (git clone / source) gets its own explanation. */
+export function UninstallDialogBody({ name, version, folder, busy, error, onCancel, onConfirm, startsBriefly = false }: {
+	name: string; version?: string; folder: PluginFolderView | null; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void;
+	/** Switched off but has a server part: it runs briefly for its uninstall trigger. */
+	startsBriefly?: boolean;
+}) {
+	return <div data-testid="plugin-uninstall-dialog">
+		<h2 className="text-sm font-semibold text-card-foreground">Uninstall {name}{version ? ` v${version}` : ""}?</h2>
+		{!folder ? <p className="mt-2 text-xs text-muted-foreground">{error ? "" : "Checking its folder…"}</p>
+			: folder.kind === "development" ? <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+				<p>This plugin is a <strong className="text-foreground">local copy of a git repository</strong> (a development folder). Its folder, including the source code and git history, is deleted from this computer. The repository online is not touched, so you can clone it again later.</p>
+				{folder.remote && <p>Repository: <code className="break-all text-foreground">{folder.remote}</code></p>}
+				<p>Changes in this folder that were never pushed are lost. Its saved data is deleted too.</p>
+			</div>
+			: <p className="mt-2 text-xs text-muted-foreground">{folder.link ? "This plugin's folder is a link: the link is removed, the folder it points to is kept. " : ""}Its code and all the data it saved are deleted. Installing it again later starts fresh.</p>}
+		{folder && startsBriefly && <p data-testid="uninstall-starts-briefly" className="mt-2 text-xs text-muted-foreground">{name} will run briefly to clean up before it&apos;s removed.</p>}
+		{folder && <p className="mt-2 break-all text-[11px] text-muted-foreground">Folder: <code>{folder.path}</code></p>}
+		{error && <p role="alert" className="mt-2 break-words text-xs text-destructive">{error}</p>}
+		<div className="mt-4 flex justify-end gap-2">
+			<Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={busy}>Cancel</Button>
+			<Button type="button" variant="destructive" size="sm" data-testid="uninstall-confirm" onClick={onConfirm} disabled={busy || !folder}>{busy ? "Uninstalling…" : "Uninstall"}</Button>
+		</div>
+	</div>;
+}
+
+function UninstallDialog({ id, name, version, enabled, backend, onClose, onDone }: { id: string; name: string; version?: string; enabled: boolean; backend: boolean; onClose: () => void; onDone: (text: string) => void }) {
+	const { manager } = usePlugins();
+	const [folder, setFolder] = useState<PluginFolderView | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	useEffect(() => {
+		let live = true;
+		fetch(`/api/plugin-uninstall?id=${encodeURIComponent(id)}`, { cache: "no-store" })
+			.then(async res => { const body = await res.json() as PluginFolderView & { error?: string }; if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`); if (live) setFolder(body); })
+			.catch(err => { if (live) setError((err as Error).message); });
+		return () => { live = false; };
+	}, [id]);
+	const confirm = async () => {
+		setBusy(true); setError("");
+		try {
+			// The server sends the plugin its uninstall trigger FIRST (it may stop
+			// the uninstall), then switches it off and deletes it.
+			const res = await fetch("/api/plugin-uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+			const body = await res.json().catch(() => ({})) as { error?: string; restartRequired?: boolean; notes?: string[] };
+			if (!res.ok) throw new Error(body.error ?? `Uninstall failed (${res.status})`);
+			await manager?.refresh();
+			onDone([`${name} was uninstalled.`, ...(body.notes ?? []), body.restartRequired ? "Restart LearnHarness to finish removing it." : ""].filter(Boolean).join(" "));
+		} catch (err) { setError((err as Error).message); setBusy(false); }
+	};
+	const frame = <div className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 shadow-lg" onClick={e => e.stopPropagation()} />;
+	return <HostDialog open frame={frame} aria-label={`Uninstall ${name}`} onClose={() => { if (!busy) onClose(); return "closed"; }}
+		backdropProps={{ className: "fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm" }}>
+		<UninstallDialogBody name={name} version={version} folder={folder} busy={busy} error={error} onCancel={onClose} onConfirm={() => void confirm()} startsBriefly={!enabled && backend} />
+	</HostDialog>;
 }

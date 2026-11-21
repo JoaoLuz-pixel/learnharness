@@ -30,6 +30,8 @@
 - [PluginToolRenderer](#plugintoolrenderer)
 - [PluginToolRenderProps](#plugintoolrenderprops)
 - [PluginTools](#plugintools)
+- [PluginUninstallHandler](#pluginuninstallhandler)
+- [PluginUninstallResult](#pluginuninstallresult)
 - [PluginView](#pluginview)
 
 ## PluginAction
@@ -255,6 +257,7 @@ export interface PluginBackendContext {
     readonly dataDirectory: string;
     readonly signal: AbortSignal;
     cleanup(dispose: PluginCleanup): void;
+    onUninstall?(handler: PluginUninstallHandler): () => void;
     learning: PluginLearningData;
     inference: PluginInference;
     agents: PluginAgentService;
@@ -272,7 +275,7 @@ export interface PluginBackendContext {
 }
 ```
 
-**Related types:** [PluginAgentService](plugin-agents.md#pluginagentservice), [PluginBackgroundTool](plugin-workers.md#pluginbackgroundtool), [PluginCleanup](plugins.md#plugincleanup), [PluginInference](plugins.md#plugininference), [PluginInstructions](plugins.md#plugininstructions), [PluginLearningData](plugins.md#pluginlearningdata), [PluginManifest](plugins.md#pluginmanifest), [PluginProblemTypeDefinition](plugin-problems.md#pluginproblemtypedefinition), [PluginQuestionTypeDefinition](plugin-questions.md#pluginquestiontypedefinition), [PluginToolContext](plugins.md#plugintoolcontext), [PluginTools](plugins.md#plugintools), [PluginWorkerService](plugin-workers.md#pluginworkerservice), [ServerEvent](events.md#serverevent).
+**Related types:** [PluginAgentService](plugin-agents.md#pluginagentservice), [PluginBackgroundTool](plugin-workers.md#pluginbackgroundtool), [PluginCleanup](plugins.md#plugincleanup), [PluginInference](plugins.md#plugininference), [PluginInstructions](plugins.md#plugininstructions), [PluginLearningData](plugins.md#pluginlearningdata), [PluginManifest](plugins.md#pluginmanifest), [PluginProblemTypeDefinition](plugin-problems.md#pluginproblemtypedefinition), [PluginQuestionTypeDefinition](plugin-questions.md#pluginquestiontypedefinition), [PluginToolContext](plugins.md#plugintoolcontext), [PluginTools](plugins.md#plugintools), [PluginUninstallHandler](plugins.md#pluginuninstallhandler), [PluginWorkerService](plugin-workers.md#pluginworkerservice), [ServerEvent](events.md#serverevent).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
@@ -281,6 +284,7 @@ export interface PluginBackendContext {
 - [dataDirectory](#pluginbackendcontext-datadirectory)
 - [signal](#pluginbackendcontext-signal)
 - [cleanup](#pluginbackendcontext-cleanup)
+- [onUninstall](#pluginbackendcontext-onuninstall)
 - [learning](#pluginbackendcontext-learning)
 - [inference](#pluginbackendcontext-inference)
 - [agents](#pluginbackendcontext-agents)
@@ -340,6 +344,24 @@ cleanup(dispose: PluginCleanup): void;
 | `dispose` | `PluginCleanup` |
 
 **Returns:** `void`.
+
+### PluginBackendContext onUninstall
+
+Uninstall trigger: runs before the learner's uninstall
+deletes this plugin's code and data, so it can export, revoke or notify.
+Return `{ cancel: "reason" }` to stop the uninstall (the reason is shown).
+A switched-off plugin is activated briefly just for this. Absent in older
+apps: call it as `ctx.onUninstall?.(handler)`. Returns an unregister.
+
+```ts
+onUninstall?(handler: PluginUninstallHandler): () => void;
+```
+
+| Parameter | Type |
+| --- | --- |
+| `handler` | `PluginUninstallHandler` |
+
+**Returns:** `() => void`.
 
 ### PluginBackendContext learning
 
@@ -2020,6 +2042,44 @@ create(context: PluginToolContext): AgentTool<any>[];
 | `context` | `PluginToolContext` |
 
 **Returns:** `AgentTool<any>[]`.
+
+## PluginUninstallHandler
+
+Public SDK type, exported as `PluginUninstallHandler`. Import with `import type`; the SDK has no runtime exports.
+
+Runs ONLY when the learner uninstalls this plugin (never on disable or
+restart), before its folder and data are deleted. `signal` aborts at the
+30 s limit; after a throw or the limit, the uninstall continues.
+
+```ts
+export type PluginUninstallHandler = (info: {
+    signal: AbortSignal;
+}) => PluginUninstallResult | Promise<PluginUninstallResult>;
+```
+
+**Related types:** [PluginUninstallResult](plugins.md#pluginuninstallresult).
+
+## PluginUninstallResult
+
+Public SDK type, exported as `PluginUninstallResult`. Import with `import type`; the SDK has no runtime exports.
+
+What an uninstall handler may answer: nothing (go ahead), or a reason to stop.
+
+```ts
+export type PluginUninstallResult = void | undefined | {
+    cancel: string;
+};
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [cancel](#pluginuninstallresult-cancel)
+
+### PluginUninstallResult cancel
+
+```ts
+cancel: string;
+```
 
 ## PluginView
 

@@ -10,7 +10,7 @@ import type { PluginQuestionVariant } from "../core/plugin-questions.ts";
 import type { NativePluginQuestionDefinition } from "../agent/plugin-question-tools.ts";
 import { preparePluginProblemType, createPluginProblemParameters, type NativePluginProblemDefinition } from "../core/plugin-problems.ts";
 import type { NativePluginProblemContribution } from "../agent/plugin-problem-tools.ts";
-import type { PluginAgentKind, PluginBackendContext, PluginBackendModule, PluginCleanup, PluginFrontendContext, PluginInfo, PluginInference, PluginInstructions, PluginLearningData, PluginManifest, PluginNotification, PluginToolContext, PluginTools } from "../core/plugins.ts";
+import type { PluginAgentKind, PluginBackendContext, PluginBackendModule, PluginCleanup, PluginFrontendContext, PluginInfo, PluginInference, PluginInstructions, PluginLearningData, PluginManifest, PluginNotification, PluginToolContext, PluginTools, PluginUninstallHandler } from "../core/plugins.ts";
 import type { PluginAgentService } from "../core/plugin-agents.ts";
 import type { PluginWorkerService } from "../core/plugin-workers.ts";
 import type { ServerEvent } from "../core/events.ts";
@@ -78,6 +78,7 @@ interface Activation {
 	tools: Set<Tools>;
 	questions: Map<string, QuestionDefinition>;
 	problems: Map<string, NativePluginProblemDefinition>;
+	uninstallHandlers: Set<PluginUninstallHandler>;
 	ready: boolean;
 }
 interface Package {
@@ -176,6 +177,9 @@ const mimeTypes: Record<string, string> = {
 	".woff": "font/woff", ".woff2": "font/woff2", ".ico": "image/x-icon", ".txt": "text/plain; charset=utf-8",
 };
 
+/** How long one uninstall handler may run before the uninstall continues. */
+export const UNINSTALL_HANDLER_TIMEOUT_MS = 30_000;
+
 /** Injectable, trusted-local-code host. Importing this module does no IO. */
 export function createPluginHost(deps: PluginHostDependencies) {
 	// Installed packages/state are runtime inputs, not build-time dependencies.
@@ -216,6 +220,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		activation.tools.clear();
 		activation.questions.clear();
 		activation.problems.clear();
+		activation.uninstallHandlers.clear();
 		activation.controller.abort();
 		const failures: string[] = [];
 		for (const cleanup of activation.cleanups.splice(0).reverse()) {
@@ -230,7 +235,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			return;
 		}
 		const manifest = pkg.info.manifest;
-		const activation: Activation = { controller: new AbortController(), cleanups: [], handlers: new Map(), instructions: new Set(), tools: new Set(), questions: new Map(), problems: new Map(), ready: false };
+		const activation: Activation = { controller: new AbortController(), cleanups: [], handlers: new Map(), instructions: new Set(), tools: new Set(), questions: new Map(), problems: new Map(), uninstallHandlers: new Set(), ready: false };
 		pkg.activation = activation;
 		const requireLive = () => { if (!live(pkg, activation)) throw new Error("Plugin activation is no longer active"); };
 		const cleanup = (fn: PluginCleanup) => {
@@ -247,6 +252,12 @@ export function createPluginHost(deps: PluginHostDependencies) {
 				cleanup(() => services.workers.dispose());
 				const ctx: PluginBackendContext = {
 					manifest, directory: pkg.directory, dataDirectory, signal: activation.controller.signal, cleanup, ...services,
+					onUninstall(handler: PluginUninstallHandler) {
+						requireLive();
+						if (typeof handler !== "function") throw new Error("Plugin uninstall handler must be a function");
+						activation.uninstallHandlers.add(handler);
+						return () => { activation.uninstallHandlers.delete(handler); };
+					},
 					createBackgroundTool(context, definition) { requireLive(); return services.createBackgroundTool(context, definition); },
 					registerInstructions(contribution: PluginInstructions) {
 						requireLive();
@@ -385,6 +396,10 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			if (candidate.info.enabled && !candidate.blocked) await activate(candidate);
 		}
 		for (const [id, pkg] of packages) if (!ids.has(id)) {
+			// Uninstalled (owner, 2026-11-21): a package whose backend never loaded
+			// left nothing in this process, so it simply leaves the list. Loaded
+			// backend code stays cached until restart, so that case still says so.
+			if (!pkg.backend && !pkg.activation) { packages.delete(id); continue; }
 			pkg.restart = "Restart required: plugin package removed";
 			pkg.info.error = [pkg.restart, pkg.contributionWarning].filter(Boolean).join("; ");
 		}
@@ -542,6 +557,53 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		list(): PluginInfo[] {
 			assertOpen();
 			return [...packages.values()].map(({ info }) => ({ ...info, ...(info.manifest ? { manifest: { ...info.manifest } } : {}) })).sort((a, b) => a.id.localeCompare(b.id));
+		},
+		/**
+		 * The uninstall trigger (owner, 2026-11-21): run the plugin's onUninstall
+		 * handlers before anything is deleted. A switched-off plugin's backend is
+		 * activated just for this and deactivated again. A `{cancel}` answer stops
+		 * the uninstall; a throw or the time limit lets it continue (noted).
+		 */
+		prepareUninstall(id: string, timeoutMs = UNINSTALL_HANDLER_TIMEOUT_MS): Promise<{ cancelled?: string; notes: string[]; ran: number }> {
+			return enqueue(async () => {
+				assertOpen(); await initializeInternal();
+				const pkg = get(id);
+				if (pkg.info.origin !== "community") throw new PluginHostError(400, "Core plugins can't be uninstalled");
+				const notes: string[] = [];
+				if (!pkg.info.manifest?.backend || pkg.blocked || pkg.restart) return { notes, ran: 0 };
+				const temporary = !pkg.activation;
+				if (temporary) {
+					await activate(pkg);
+					if (!pkg.activation) return { notes: [`It could not start to clean up: ${pkg.info.error ?? "activation failed"}`], ran: 0 };
+				}
+				const handlers = [...pkg.activation!.uninstallHandlers];
+				let cancelled: string | undefined;
+				try {
+					for (const handler of handlers) {
+						const controller = new AbortController();
+						let timer: ReturnType<typeof setTimeout> | undefined;
+						const timeout = new Promise<"timeout">(resolve => { timer = setTimeout(() => { controller.abort(); resolve("timeout"); }, timeoutMs); });
+						try {
+							const result = await Promise.race([Promise.resolve().then(() => handler({ signal: controller.signal })), timeout]);
+							if (result === "timeout") { notes.push(`Its clean-up took longer than ${Math.round(timeoutMs / 1000)} s and was skipped.`); continue; }
+							if (result && typeof result === "object" && typeof (result as { cancel?: unknown }).cancel === "string" && (result as { cancel: string }).cancel.trim()) {
+								cancelled = (result as { cancel: string }).cancel.trim().slice(0, 500);
+								break;
+							}
+						} catch (e) {
+							notes.push(`Its clean-up failed: ${errorText(e)}`);
+						} finally { clearTimeout(timer); }
+					}
+				} finally {
+					if (temporary) {
+						const failures = await deactivate(pkg);
+						pkg.info.status = pkg.info.enabled ? pkg.info.status : "disabled";
+						if (failures.length) notes.push(`Cleanup: ${failures.join("; ")}`);
+					}
+					change();
+				}
+				return { ...(cancelled ? { cancelled } : {}), notes, ran: handlers.length };
+			});
 		},
 		setEnabled(id: string, enabled: boolean): Promise<void> {
 			// Let a cooperative in-flight activation finish so queued teardown cannot deadlock.

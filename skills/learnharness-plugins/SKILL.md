@@ -84,6 +84,12 @@ The included no-build examples can be copied directly; they do not need npm setu
 - Backend activation is per server; frontend activation per window; view/editor mounts
   have shorter lifetimes. Scope widgets to mount signals, clean up React roots/events/
   subscriptions, fence late awaits/publications and avoid top-level side effects.
+- Uninstalling deletes a Community plugin's whole folder, `data/` included. Apps with it
+  send a backend uninstall trigger first: `ctx.onUninstall?.(handler)` (optional chaining:
+  older apps lack it) runs only for uninstall, never disable/restart/update, while `data/`
+  still exists; even a switched-off plugin is activated briefly for it. Return
+  `{ cancel: "reason" }` to stop the uninstall; throws and the 30 s limit don't block it.
+  Keep it short and idempotent. See the guide's uninstall section.
 - Host view shells own top bar/title/gear. Register actions before explicit placements;
   registration creates no automatic chrome. Top bars require explicit sessions/own-view
   targets. Optional action `shortcut` metadata explicitly scopes app-wide/session/own-view

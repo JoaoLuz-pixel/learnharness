@@ -15,9 +15,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { strToU8, zipSync } from "fflate";
 import {
 	checkPluginUpdates, clearReleaseCache, compareVersions, downloadPluginUpdate, githubRepository, inspectPluginZip,
-	assertNotInstalled, installPluginPackage, pickPluginAsset, replacePluginPackage, type InstallPaths,
+	assertNotInstalled, installedFolderInfo, installPluginPackage, pickPluginAsset, uninstallPluginFolder, replacePluginPackage, type InstallPaths,
 } from "../src/server/plugin-install.ts";
-import { InstallDialogBody, PluginsSection } from "../components/settings/plugins-section.tsx";
+import { InstallDialogBody, PluginsSection, UninstallDialogBody } from "../components/settings/plugins-section.tsx";
 
 const manifest = (patch: Record<string, unknown> = {}) => JSON.stringify({ apiVersion: 1, id: "hello-world", name: "Hello World", version: "1.0.0", minAppVersion: "0.6.1", main: "main.js", author: "Ada", ...patch });
 const zip = (files: Record<string, string>) => zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)])));
@@ -151,5 +151,62 @@ describe("Community plugins page", () => {
 		assert.match(html, /github\.com\/ada\/hello-world/);
 		assert.match(html, /not sandboxed/);
 		assert.match(html, /<input type="checkbox" data-testid="install-enable"\/>/, "unchecked");
+	});
+});
+
+describe("uninstalling (owner, 2026-11-21)", () => {
+	it("a zip-installed plugin: its whole folder goes, code AND data", () => {
+		installPluginPackage(inspectPluginZip(built(), "0.6.4"), paths);
+		fs.mkdirSync(path.join(paths.pluginDirectory, "hello-world", "data"));
+		fs.writeFileSync(path.join(paths.pluginDirectory, "hello-world", "data", "notes.json"), "x");
+		assert.equal(installedFolderInfo("hello-world", paths).kind, "package");
+		uninstallPluginFolder("hello-world", paths);
+		assert.deepEqual(fs.readdirSync(paths.pluginDirectory), []);
+	});
+	it("a development folder (git clone) is recognised, its remote shown without credentials, and removed", () => {
+		const dir = path.join(paths.pluginDirectory, "dev-plugin");
+		fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+		fs.mkdirSync(path.join(dir, "src"));
+		fs.writeFileSync(path.join(dir, ".git", "config"), '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://ada:ghp_SECRET@github.com/ada/dev-plugin.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n');
+		// Git keeps its objects read-only: the delete must still get through.
+		fs.mkdirSync(path.join(dir, ".git", "objects", "ab"), { recursive: true });
+		fs.writeFileSync(path.join(dir, ".git", "objects", "ab", "cdef"), "blob");
+		fs.chmodSync(path.join(dir, ".git", "objects", "ab", "cdef"), 0o444);
+		fs.chmodSync(path.join(dir, ".git", "objects", "ab"), 0o555);
+		const info = installedFolderInfo("dev-plugin", paths);
+		assert.equal(info.kind, "development");
+		assert.equal(info.remote, "https://github.com/ada/dev-plugin.git");
+		assert.doesNotMatch(JSON.stringify(info), /SECRET|ada:/);
+		uninstallPluginFolder("dev-plugin", paths);
+		assert.equal(fs.existsSync(dir), false);
+	});
+	it("a linked folder: only the link goes, never what it points to", () => {
+		const target = fs.mkdtempSync(path.join(os.tmpdir(), "lh-linked-plugin-"));
+		fs.writeFileSync(path.join(target, "keep.txt"), "mine");
+		fs.mkdirSync(paths.pluginDirectory, { recursive: true });
+		fs.symlinkSync(target, path.join(paths.pluginDirectory, "linked-plugin"), "dir");
+		assert.equal(installedFolderInfo("linked-plugin", paths).link, true);
+		uninstallPluginFolder("linked-plugin", paths);
+		assert.equal(fs.existsSync(path.join(paths.pluginDirectory, "linked-plugin")), false);
+		assert.equal(fs.readFileSync(path.join(target, "keep.txt"), "utf8"), "mine");
+	});
+	it("refuses Core plugins, bad ids and missing folders", () => {
+		assert.throws(() => uninstallPluginFolder("flashcards", paths), /Core plugins can't be uninstalled/);
+		for (const bad of ["../x", "", "A", "x/y"]) assert.throws(() => uninstallPluginFolder(bad, paths), /Unknown plugin/, bad);
+		assert.throws(() => uninstallPluginFolder("not-installed", paths), /no longer exists/);
+	});
+	it("the confirmation explains what is deleted, per kind of folder", () => {
+		const dev = renderToStaticMarkup(<UninstallDialogBody name="Dev" version="0.1.0" folder={{ id: "dev", kind: "development", link: false, remote: "https://github.com/ada/dev.git", path: "/p/dev" }} busy={false} error="" onCancel={() => {}} onConfirm={() => {}} />);
+		assert.match(dev, /Uninstall Dev v0\.1\.0\?/);
+		assert.match(dev, /local copy of a git repository/);
+		assert.match(dev, /repository online is not touched/);
+		assert.match(dev, /https:\/\/github\.com\/ada\/dev\.git/);
+		assert.match(dev, /never pushed are lost/);
+		const pkg = renderToStaticMarkup(<UninstallDialogBody name="Hello" folder={{ id: "hello", kind: "package", link: false, path: "/p/hello" }} busy={false} error="" onCancel={() => {}} onConfirm={() => {}} />);
+		assert.match(pkg, /code and all the data it saved are deleted/);
+		assert.doesNotMatch(pkg, /git repository/);
+		assert.doesNotMatch(pkg, /run briefly/, "an enabled plugin just gets its trigger");
+		const off = renderToStaticMarkup(<UninstallDialogBody name="Sync helper" folder={{ id: "sync-helper", kind: "package", link: false, path: "/p/s" }} busy={false} error="" onCancel={() => {}} onConfirm={() => {}} startsBriefly />);
+		assert.match(off, /Sync helper will run briefly to clean up before it(&#x27;|')s removed\./);
 	});
 });

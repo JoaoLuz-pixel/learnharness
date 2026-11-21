@@ -25,6 +25,12 @@ export const PLUGIN_API_VERSION = 1 as const;
 export const PLUGIN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** Release activation/mount resources; the host accepts synchronous or async cleanup. */
 export type PluginCleanup = () => void | Promise<void>;
+/** What an uninstall handler may answer: nothing (go ahead), or a reason to stop. */
+export type PluginUninstallResult = void | undefined | { cancel: string };
+/** Runs ONLY when the learner uninstalls this plugin (never on disable or
+ *  restart), before its folder and data are deleted. `signal` aborts at the
+ *  30 s limit; after a throw or the limit, the uninstall continues. */
+export type PluginUninstallHandler = (info: { signal: AbortSignal }) => PluginUninstallResult | Promise<PluginUninstallResult>;
 export interface PluginManifest {
 	apiVersion: 1;
 	id: string;
@@ -145,6 +151,12 @@ export interface PluginBackendContext {
 	/** Register resource cleanup for deactivation, also supported as activate's
 	 * return value. A cleanup registered after expiry is still invoked. */
 	cleanup(dispose: PluginCleanup): void;
+	/** Uninstall trigger: runs before the learner's uninstall
+	 * deletes this plugin's code and data, so it can export, revoke or notify.
+	 * Return `{ cancel: "reason" }` to stop the uninstall (the reason is shown).
+	 * A switched-off plugin is activated briefly just for this. Absent in older
+	 * apps: call it as `ctx.onUninstall?.(handler)`. Returns an unregister. */
+	onUninstall?(handler: PluginUninstallHandler): () => void;
 	/** Read-only native learning records; not a programmable core-data write API. */
 	learning: PluginLearningData;
 	/** Host-authenticated raw model requests, scoped to activation; can incur cost. */

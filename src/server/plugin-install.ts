@@ -273,3 +273,71 @@ export async function downloadPluginUpdate(id: string, fetchImpl: Fetch = fetch,
 	if (pkg.manifest.id !== id) throw new PluginInstallError(`The release zip holds “${pkg.manifest.id}”, not “${id}”.`, "mismatch");
 	return pkg;
 }
+
+/* ── uninstall (owner, 2026-11-21) ── */
+
+export interface InstalledFolderInfo {
+	id: string;
+	/** "development" = a source/git working copy (.git, package.json or src/). */
+	kind: "package" | "development";
+	/** The folder is a link to a folder elsewhere: only the link is removed. */
+	link: boolean;
+	/** The git remote ("origin" first), without any credentials. */
+	remote?: string;
+	path: string;
+}
+
+function gitRemote(folder: string): string | undefined {
+	let config: string;
+	try { config = fs.readFileSync(path.join(folder, ".git", "config"), "utf8"); } catch { return undefined; }
+	const remotes = [...config.matchAll(/\[remote "([^"]+)"\]([^[]*)/g)].map(m => ({ name: m[1]!, url: m[2]!.match(/^\s*url\s*=\s*(.+?)\s*$/m)?.[1] }));
+	const url = (remotes.find(r => r.name === "origin") ?? remotes[0])?.url;
+	if (!url) return undefined;
+	try { const parsed = new URL(url); parsed.username = ""; parsed.password = ""; return parsed.toString(); }
+	catch { return url; } // scp-style user@host:path carries no password
+}
+
+function communityFolder(id: string, paths: InstallPaths): string {
+	if (!PLUGIN_ID_PATTERN.test(id)) throw new PluginInstallError("Unknown plugin.");
+	if ((corePluginIds as string[]).includes(id)) throw new PluginInstallError("Core plugins can't be uninstalled; switch them off instead.", "reserved");
+	const folder = path.join(paths.pluginDirectory, id);
+	if (path.resolve(path.dirname(folder)) !== path.resolve(paths.pluginDirectory)) throw new PluginInstallError("Unknown plugin.");
+	return folder;
+}
+
+/** What uninstalling this plugin would remove (for the confirmation). */
+export function installedFolderInfo(id: string, paths: InstallPaths = defaultInstallPaths()): InstalledFolderInfo {
+	const folder = communityFolder(id, paths);
+	let stat: fs.Stats;
+	try { stat = fs.lstatSync(folder); } catch { throw new PluginInstallError("This plugin's folder no longer exists."); }
+	const link = stat.isSymbolicLink();
+	const has = (name: string) => { try { fs.lstatSync(path.join(folder, name)); return true; } catch { return false; } };
+	const development = !link && (has(".git") || has("package.json") || has("src"));
+	const remote = development ? gitRemote(folder) : undefined;
+	return { id, kind: development ? "development" : "package", link, ...(remote ? { remote } : {}), path: folder };
+}
+
+/** Clear read-only flags under `dir` (never following links). Git stores its
+ *  objects read-only, and on Windows a read-only file can't be deleted: the
+ *  delete stopped half-way through a git clone (EPERM) without this. */
+function makeWritable(dir: string): void {
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isSymbolicLink()) continue;
+		if (entry.isDirectory()) { try { fs.chmodSync(full, 0o777); } catch { /* best effort */ } makeWritable(full); }
+		else { try { fs.chmodSync(full, 0o666); } catch { /* best effort */ } }
+	}
+}
+
+/** Delete a community plugin's whole folder (code AND data, owner's choice).
+ *  A linked folder: only the link goes, never what it points to. */
+export function uninstallPluginFolder(id: string, paths: InstallPaths = defaultInstallPaths()): InstalledFolderInfo {
+	const info = installedFolderInfo(id, paths);
+	if (info.link) fs.unlinkSync(info.path);
+	else {
+		try { fs.chmodSync(info.path, 0o777); } catch { /* best effort */ }
+		makeWritable(info.path);
+		fs.rmSync(info.path, { recursive: true, force: true, maxRetries: 3 });
+	}
+	return info;
+}

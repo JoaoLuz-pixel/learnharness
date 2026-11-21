@@ -179,6 +179,8 @@ The SDK is **type-only**. Call the contexts supplied by LearnHarness, not runtim
 | [PluginUi](plugin-ui.md#pluginui) | `plugin-ui` |
 | [PluginUiCallback](plugin-ui.md#pluginuicallback) | `plugin-ui` |
 | [PluginUiContent](plugin-ui.md#pluginuicontent) | `plugin-ui` |
+| [PluginUninstallHandler](plugins.md#pluginuninstallhandler) | `plugins` |
+| [PluginUninstallResult](plugins.md#pluginuninstallresult) | `plugins` |
 | [PluginView](plugins.md#pluginview) | `plugins` |
 | [PluginWidgetHandle](plugin-ui.md#pluginwidgethandle) | `plugin-ui` |
 | [PluginWidgetOptions](plugin-ui.md#pluginwidgetoptions) | `plugin-ui` |
@@ -256,4 +258,4 @@ These are reachable through public data, event, inheritance or helper-type relat
 
 Standard JavaScript/DOM types (`Promise`, `AbortSignal`, `File`, `HTMLElement`, and utility types) use their standard contracts. Pi model/messages/tools and TypeBox schemas use the exact peer versions declared by the bundled SDK's `package.json`. Supply those peers when typechecking; they are development types, not permission to import private LearnHarness runtime modules.
 
-Coverage: **140 public types**, **57 supporting declarations**, **895 declared member signatures/variants**. Generation contains no build timestamps or absolute source paths.
+Coverage: **142 public types**, **57 supporting declarations**, **897 declared member signatures/variants**. Generation contains no build timestamps or absolute source paths.
