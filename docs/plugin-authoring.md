@@ -162,6 +162,28 @@ catalog in `core-plugins.json` and stages generated packages. UI Showcase remain
 source/developer example, not a shipped core package. This build command never installs
 or enables a package in a learning-data directory.
 
+### Install from a zip, and updates from GitHub releases
+
+In apps that have it, **Settings → Community plugins → Install plugin from file…**
+(or dropping a `.zip` on that page) installs a **built** package. The zip holds the
+`dist/` contents with `manifest.json` at its top level, in a `dist/` folder, or inside
+one wrapping folder. Nothing is built or run while installing; source-only zips are
+refused, an already-installed ID is refused (never overwritten), and the learner
+chooses whether to enable it.
+
+To let the app offer updates, add an optional `repository` field to the manifest:
+
+```json
+{ "repository": "owner/repo" }
+```
+
+`https://github.com/owner/repo` also works. Older apps ignore the field, so it is safe
+for any `minAppVersion`. The app compares the repository's **latest published release**
+(its tag, `v1.2.3` or `1.2.3`) with the installed `version`. Attach the built zip to
+that release, named after the plugin ID (e.g. `my-plugin-1.2.3.zip`); a release with a
+single `.zip` asset also works. Updating replaces `dist/` and keeps `data/`; the manifest
+`id` must match and its `version` must be higher. Already-loaded code still needs a restart.
+
 ### Install a prebuilt package
 
 Copy/extract the plugin so its built files occupy

@@ -71,3 +71,5 @@ export { deviceSync } from "./device-sync.ts";
 
 // Device-only documents: drafts + keyboard map (owner, 2026-11-16).
 export { readDeviceDocument, writeDeviceDocument, deleteDeviceDocument, deviceDocumentPath, MAX_DEVICE_DOCUMENT_BYTES } from "./device-local.ts";
+export { assertNotInstalled, checkPluginUpdates, downloadPluginUpdate, inspectPluginZip, installPluginPackage, MAX_PLUGIN_ZIP_BYTES, PluginInstallError, replacePluginPackage, summarize as summarizePluginPackage } from "./plugin-install.ts";
+export type { PluginPackageSummary, PluginUpdateInfo } from "./plugin-install.ts";

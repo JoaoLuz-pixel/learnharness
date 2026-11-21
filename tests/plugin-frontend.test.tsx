@@ -626,9 +626,13 @@ describe("plugin frontend surface and native importer", () => {
 			assert.equal(activated, 1); assert.equal(activeSources, 1); assert.equal(settingsMounts, 0);
 			assert.ok(document.body.textContent?.includes("/fixture/writable/plugins"));
 			const ids = [...document.querySelectorAll('[data-testid]')].map(node => node.getAttribute("data-testid"));
+			// Owner layout (2026-11-21): install first, then the plugins, then the
+			// manual details inside the collapsed Advanced section.
+			assert.ok(ids.indexOf("plugin-install") < ids.indexOf("plugin-fixture"));
+			assert.ok(ids.indexOf("plugin-fixture") < ids.indexOf("plugin-advanced"));
+			assert.ok(ids.indexOf("plugin-advanced") < ids.indexOf("plugin-install-help"));
 			assert.ok(ids.indexOf("plugin-install-help") < ids.indexOf("plugin-authoring-help"));
 			assert.ok(ids.indexOf("plugin-authoring-help") < ids.indexOf("plugin-directory"));
-			assert.ok(ids.indexOf("plugin-directory") < ids.indexOf("plugin-fixture"));
 			const refresh = document.querySelector<HTMLButtonElement>('[aria-label="Refresh plugins"]')!;
 			assert.ok(document.querySelector('[data-testid="plugin-directory"]')?.contains(refresh));
 			assert.equal(refresh.textContent, "");
@@ -707,7 +711,9 @@ describe("plugin frontend surface and native importer", () => {
 	});
 	it("Settings explains trusted local code, broad access, restart recovery and directory install/refresh", () => {
 		const html = renderToStaticMarkup(<PluginsSection />);
-		for (const copy of ["trusted local code", "broad file and network access", "not sandboxed", "restarting LearnHarness", "disabled by default", "Refresh plugins", "How to install a plugin", "Build a plugin", "Download authoring skill", "npm run build", "Prebuilt packages", "Preserve", "data/"]) assert.ok(html.includes(copy), copy);
+		// The full trust warning lives in the install dialog (tests/plugin-install);
+		// the page keeps the short version (owner, 2026-11-21).
+		for (const copy of ["Only install plugins you trust", "sandboxed", "Nothing runs until you enable it", "disabled by default", "Refresh plugins", "How to install a plugin", "Build a plugin", "Download authoring skill", "npm run build", "Prebuilt packages", "Preserve", "data/"]) assert.ok(html.includes(copy), copy);
 		const document = parseHTML(html).document;
 		const help = document.querySelector('[data-testid="plugin-install-help"]')!;
 		assert.equal(help.hasAttribute("open"), false);
