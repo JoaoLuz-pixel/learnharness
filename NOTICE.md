@@ -32,6 +32,8 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-20 | [`4df9218`](https://github.com/JoaoLuz-pixel/learnharness/commit/4df9218) | Several syncs on one Device Sync endpoint: a connecting device sees every sync and its devices, joins one or creates its own, and can change sync later; the original sync stays in place; a removed sync stops syncing instead of deleting local data. Slightly wider Settings window. |
 | 2026-11-21 | [`bc2582c`](https://github.com/JoaoLuz-pixel/learnharness/commit/bc2582c) | Install community plugins from a ready-built .zip (button or drop) with a confirmation and optional enable; duplicates refused; version shown per plugin; updates from a plugin's GitHub releases via an optional manifest `repository` field; manual details under "Advanced". |
 | 2026-11-21 | (release) | Version 0.6.5. |
+| 2026-11-21 | [`7c45672`](https://github.com/JoaoLuz-pixel/learnharness/commit/7c45672) | Uninstall community plugins (code and data; development folders explained, online repository untouched); new optional plugin hook `ctx.onUninstall` that runs before deletion and may stop the uninstall with a reason. |
+| 2026-11-21 | (release) | Version 0.6.6. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 
