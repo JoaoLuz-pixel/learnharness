@@ -16,7 +16,7 @@ The live list is at <https://github.com/amosblomqvist/learnharness/graphs/contri
 
 ## Modifications in this fork
 
-As required by section 5(a) of the AGPL-3.0, this fork states that it modifies the original work. The fork is based on the original's commit [`cb25c8e`](https://github.com/amosblomqvist/learnharness/commit/cb25c8e) (version 0.6.1). Every change since then, by date (each commit link lists the files it changes):
+As required by section 5(a) of the AGPL-3.0, this fork states that it modifies the original work. The fork started from the original's commit [`cb25c8e`](https://github.com/amosblomqvist/learnharness/commit/cb25c8e) (version 0.6.1) and has since merged the original's version 0.7.0 (up to commit [`069a6a1`](https://github.com/amosblomqvist/learnharness/commit/069a6a1)). Every change this fork makes, by date (each commit link lists the files it changes):
 
 | Date | Commit | Change |
 |---|---|---|
@@ -34,6 +34,9 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-21 | (release) | Version 0.6.5. |
 | 2026-11-21 | [`7c45672`](https://github.com/JoaoLuz-pixel/learnharness/commit/7c45672) | Uninstall community plugins (code and data; development folders explained, online repository untouched); new optional plugin hook `ctx.onUninstall` that runs before deletion and may stop the uninstall with a reason. |
 | 2026-11-21 | (release) | Version 0.6.6. |
+| 2026-11-22 | [`41e6e31`](https://github.com/JoaoLuz-pixel/learnharness/commit/41e6e31) | Uninstall dialog: no folder line; a plugin's stop reason shown in its own words. |
+| 2026-11-22 | (merge) | Merged the original's version 0.7.0 (sidebar folders, graph folder filter, transcript width and compact list, side-by-side questions, performance work, prompt editor, model list refresh, PDF figure tools, Drawing Pad improvements). Conflicts kept both sides: Device Sync's delete-everywhere approval also covers the new folder delete, and Device Sync starts alongside the new model-list refresh. |
+| 2026-11-22 | (release) | Version 0.7.1. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 

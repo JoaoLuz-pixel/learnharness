@@ -21,12 +21,14 @@
 
 ## What this fork adds
 
-On top of LearnHarness 0.6.1 ([details and dates in NOTICE.md](NOTICE.md)):
+On top of LearnHarness 0.7.0, including its sidebar folders and performance work ([details and dates in NOTICE.md](NOTICE.md)):
 
 - **Images and documents in the chat:** paste or drop images, and attach documents by paste, drop or paperclip in both the main bar and the "Thinking while reading" box. The agent reads Word, PowerPoint, Excel, OpenDocument and `.zip` files.
 - **"Thinking while reading" send:** post a remark or question at any time; the open question is paused and the teacher responds.
-- **Device Sync:** one shared learning progress across your devices, through an SSH endpoint you control.
+- **Device Sync:** shared learning progress across your devices, through an SSH endpoint you control. One endpoint can hold several syncs: a device joins one or creates its own, and can change sync later.
+- **Community plugins from a file:** install a plugin from its `.zip` (button or drag and drop), see each plugin's version, update plugins from their GitHub releases, and uninstall them. Plugins can react to being uninstalled (`ctx.onUninstall`).
 - **Faster session opening:** long sessions show their latest messages first.
+- **Settings that survive restarts:** "Don't ask again", unsent drafts and keyboard shortcuts.
 - **Native Windows ARM64 build** for Windows on ARM PCs.
 
 LearnHarness uses AI agents to plan and teach lessons from your current understanding to your goal. It builds a detailed picture of what you understand and how you reason. That picture is updated as you learn.
@@ -46,7 +48,7 @@ Instead of just giving you an explanation, it uses your answers and thinking to 
 
 **Bring your files.** In the desktop app, attach PDFs, photos, or any other file with the paperclip, or drag them in. The file stays where it is: the message carries its path, and the agent reads it from there.
 
-The agent can also research questions in the background, create visual explanations, show your own images in the lesson and mark them up with arrows and labels, and build interactive demonstrations.
+The agent can also research questions in the background, create visual explanations, show your own images in the lesson and mark them up with arrows and labels (including figures it crops straight out of your PDFs, such as lecture slides), and build interactive demonstrations.
 
 ## Knowledge that carries forward
 
