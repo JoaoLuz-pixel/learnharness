@@ -244,7 +244,6 @@ export function UninstallDialogBody({ name, version, folder, busy, error, onCanc
 			</div>
 			: <p className="mt-2 text-xs text-muted-foreground">{folder.link ? "This plugin's folder is a link: the link is removed, the folder it points to is kept. " : ""}Its code and all the data it saved are deleted. Installing it again later starts fresh.</p>}
 		{folder && startsBriefly && <p data-testid="uninstall-starts-briefly" className="mt-2 text-xs text-muted-foreground">{name} will run briefly to clean up before it&apos;s removed.</p>}
-		{folder && <p className="mt-2 break-all text-[11px] text-muted-foreground">Folder: <code>{folder.path}</code></p>}
 		{error && <p role="alert" className="mt-2 break-words text-xs text-destructive">{error}</p>}
 		<div className="mt-4 flex justify-end gap-2">
 			<Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={busy}>Cancel</Button>

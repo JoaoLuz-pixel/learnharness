@@ -25,7 +25,8 @@ export async function POST(request: Request) {
 		// 1. The uninstall trigger, before anything changes (owner, 2026-11-21):
 		//    a switched-off plugin is started briefly just for it.
 		const trigger = await host.prepareUninstall(id);
-		if (trigger.cancelled) return Response.json({ error: `${plugin.manifest?.name ?? id} stopped the uninstall: ${trigger.cancelled}`, cancelled: true }, { status: 409 });
+		// The plugin's own words; the dialog title already names it.
+		if (trigger.cancelled) return Response.json({ error: trigger.cancelled, cancelled: true }, { status: 409 });
 		// 2. Switch it off (its cleanup runs), 3. delete its folder.
 		if (plugin.enabled) await host.setEnabled(id, false);
 		const loaded = plugin.status === "active" || plugin.enabled || trigger.ran > 0;
