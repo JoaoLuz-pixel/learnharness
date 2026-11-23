@@ -243,12 +243,18 @@ async function setFont(page, stack, size) {
 				document.head.appendChild(rule);
 			}
 			// The matrix reads every plan block, including offscreen ones. Lay out
-			// just those older rows while forcing sizes so their probes observe
-			// the new metrics before we compare the labels with their boxes.
-			rule.textContent = z ? `
+			// just those older rows for EVERY font and size, so their probes observe
+			// the new metrics before we compare the labels with their boxes. At the
+			// default 11px too (fork, 2026-11-23): without it, an offscreen older
+			// row that content-visibility:auto skips keeps the previous font's
+			// boxes while getComputedTextLength reports the new font, and the check
+			// fails on slow machines. Learners never see that state: a row's probe
+			// remeasures as soon as the row renders.
+			rule.textContent = `
 				[data-older-transcript-row]:has([data-testid="plan-block-full"]) { content-visibility: visible; }
+			` + (z ? `
 				:is(svg[aria-label="Plan diagram"], svg[data-plan-probe]) .text-xs { font-size: ${z} !important; }
-			` : "";
+			` : "");
 		},
 		stack,
 		size,

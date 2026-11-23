@@ -40,6 +40,7 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-23 | (this release) | The "Thinking while reading" send works on every open question, including plugin questions such as Coding Questions exercises: the question closes as paused (new plugin cancellation reason `paused`, never graded) and the learner's message follows. |
 | 2026-11-23 | (release) | Version 0.7.2. |
 | 2026-11-23 | (CI) | The Windows ARM64 CI job gets a 45-minute limit (its npm installs take ~20 min on GitHub's ARM64 runners) and excludes its build folders from Windows Defender scanning on the throwaway runner, to speed those installs up. |
+| 2026-11-23 | (CI) | The Defender exclusion is removed again (it did not speed the installs up). The plan-label check (`scripts/smoke-plan-labels.mjs`) now lays out older transcript rows for every font and size, not only for forced sizes, so it no longer fails on slow machines by measuring diagrams the browser has not laid out yet. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 
