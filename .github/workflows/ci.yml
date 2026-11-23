@@ -50,12 +50,27 @@ jobs:
           - os: ubuntu-24.04
             platform: linux-x64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Windows ARM64 runners need ~20 min for npm ci + plugins:setup alone
+    # (x64: ~5 min); its build and checks run at x64 speed. Fork, 2026-11-23.
+    timeout-minutes: ${{ matrix.platform == 'windows-arm64' && 45 || 25 }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+      # Experiment (fork, 2026-11-23): on the throwaway Windows ARM64 runner,
+      # npm installs are slowed by real-time scanning of every unpacked file.
+      # Exclude the build folders from Defender; never fails the job, and logs
+      # whether the exclusions took effect so the gain can be judged.
+      - name: Speed up installs on Windows ARM64 (Defender exclusions)
+        if: matrix.platform == 'windows-arm64'
+        shell: pwsh
+        run: |
+          $paths = @($env:GITHUB_WORKSPACE, "C:\npm\cache", $env:RUNNER_TEMP, $env:RUNNER_TOOL_CACHE, "$env:LOCALAPPDATA\Temp")
+          try { Add-MpPreference -ExclusionPath $paths -ErrorAction Stop; "Defender exclusions added: $($paths -join ', ')" }
+          catch { "Defender exclusions not applied: $($_.Exception.Message)" }
+          try { $s = Get-MpComputerStatus -ErrorAction Stop; "Real-time protection enabled: $($s.RealTimeProtectionEnabled)" }
+          catch { "Defender status unavailable: $($_.Exception.Message)" }
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
