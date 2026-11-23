@@ -4,7 +4,7 @@ import { InteractionLayersProvider } from "../components/interaction-layers.tsx"
 const renderToStaticMarkup = (node: ReactNode) => renderMarkup(<InteractionLayersProvider>{node}</InteractionLayersProvider>);
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PlanBlock, PlanPopup, type PopupMessage } from "../components/plan-block.tsx";
+import { PlanBlock, PlanPopup, svgTextWidth, type PopupMessage } from "../components/plan-block.tsx";
 import { AppearanceProvider } from "../components/settings/appearance.tsx";
 import { DEFAULT_THEME } from "../src/core/themes.ts";
 import {
@@ -67,6 +67,11 @@ const mono = fake(11, (s) => graphemesOf(s).length * 6.6);
 const cjk = fake(11, (s) => graphemesOf(s).reduce((w, g) => w + (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}、。「」]/u.test(g) ? 11 : 6.6), 0));
 
 describe("plan block layout (pure)", () => {
+	it("uses the largest SVG text measurement so line width cannot undersize its box", () => {
+		const measured = { textContent: "", getComputedTextLength: () => 117.25, getBBox: () => ({ width: 129.8125 }) } as unknown as SVGTextElement;
+		assert.equal(svgTextWidth(measured, "한국어 제목도 상자 안에"), 129.8125);
+	});
+
 	it("layers a chain top-down, one node per depth row", () => {
 		const { order, depth } = topoFor(CHAIN.nodes, CHAIN.edges);
 		assert.deepEqual(order.map((n) => n.id), ["a", "b", "c"]);

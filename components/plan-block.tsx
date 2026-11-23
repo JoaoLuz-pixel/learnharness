@@ -137,6 +137,11 @@ function browserLines(box: HTMLDivElement, title: string, maxWidth: number): str
 /** The real-font measure: the breaker answers line breaks, the SVG
  *  measurer answers widths (PROBE_TYPE on both). Answers are cached per
  *  measure — a new measure is made whenever the font may have changed. */
+export function svgTextWidth(el: SVGTextElement, text: string): number {
+	el.textContent = text;
+	return Math.max(el.getComputedTextLength(), el.getBBox().width);
+}
+
 function probeMeasure(el: SVGTextElement, box: HTMLDivElement): LabelMeasure {
 	const widths = new Map<string, number>();
 	const breaks = new Map<string, string[]>();
@@ -145,8 +150,7 @@ function probeMeasure(el: SVGTextElement, box: HTMLDivElement): LabelMeasure {
 		width(text) {
 			let w = widths.get(text);
 			if (w === undefined) {
-				el.textContent = text;
-				w = el.getComputedTextLength();
+				w = svgTextWidth(el, text);
 				widths.set(text, w);
 			}
 			return w;
