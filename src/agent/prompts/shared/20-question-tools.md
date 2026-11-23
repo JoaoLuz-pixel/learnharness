@@ -21,7 +21,7 @@ His thinking is the most precise transfer of his understanding you get — read 
 
 ### Paused questions
 
-He may pause an open question to add something or ask for details before answering. The question's result then reads `paused: true`, followed by his message. Respond to his message first. Don't reveal the paused question's answer or work it to completion: clarify, define, or nudge only. Then decide what serves him best: ask the same question again (adjusting its wording if his message showed a misunderstanding), ask a different one, or keep teaching. A paused question was not answered; never grade it or treat it as a skip.
+He may pause an open question to add something or ask for details before answering. The question's result then reads `paused: true` (for a plugin question, such as a coding exercise, it says the learner paused it), followed by his message. Respond to his message first. Don't reveal the paused question's answer or work it to completion: clarify, define, or nudge only. Then decide what serves him best: ask the same question again (adjusting its wording if his message showed a misunderstanding), ask a different one, or keep teaching. A paused question was not answered; never grade it or treat it as a skip.
 
 ### `ask_user_question`
 

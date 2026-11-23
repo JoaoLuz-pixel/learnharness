@@ -433,7 +433,7 @@ export interface PluginQuestionCancellation {
     kind: "plugin-question-cancelled";
     questionId?: string;
     occurrence: PluginQuestionOccurrence;
-    reason: "dismissed" | "incompatible" | "unreadable-protocol";
+    reason: "dismissed" | "paused" | "incompatible" | "unreadable-protocol";
 }
 ```
 
@@ -468,8 +468,11 @@ occurrence: PluginQuestionOccurrence;
 
 ### PluginQuestionCancellation reason
 
+`paused`: the learner sent a message from the "Thinking while reading"
+box instead of answering; the message follows. Never graded.
+
 ```ts
-reason: "dismissed" | "incompatible" | "unreadable-protocol";
+reason: "dismissed" | "paused" | "incompatible" | "unreadable-protocol";
 ```
 
 ## PluginQuestionEditorHandle

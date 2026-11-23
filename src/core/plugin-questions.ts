@@ -130,7 +130,9 @@ export interface PluginQuestionCancellation {
 	/** Omitted only when the question is unreadable: explicit dismissal or protocol cancellation, with an exact occurrence binding. */
 	questionId?: string;
 	occurrence: PluginQuestionOccurrence;
-	reason: "dismissed" | "incompatible" | "unreadable-protocol";
+	/** `paused`: the learner sent a message from the "Thinking while reading"
+	 *  box instead of answering; the message follows. Never graded. */
+	reason: "dismissed" | "paused" | "incompatible" | "unreadable-protocol";
 }
 
 export function preparePluginQuestionType<Q extends TSchema, A extends TSchema>(definition: PluginQuestionTypeDefinition<Q, A>): PluginQuestionTypeDefinition<Q, A> {
@@ -503,7 +505,7 @@ function readAnswer(value: unknown, snapshot?: PluginQuestionSnapshot): PluginQu
 function readCancellation(value: unknown, snapshot?: PluginQuestionSnapshot): PluginQuestionCancellation | null {
 	try {
 		const saved = clonePluginQuestionJson(value);
-		if (!record(saved) || saved.kind !== "plugin-question-cancelled" || !["dismissed", "incompatible", "unreadable-protocol"].includes(saved.reason as string)) return null;
+		if (!record(saved) || saved.kind !== "plugin-question-cancelled" || !["dismissed", "paused", "incompatible", "unreadable-protocol"].includes(saved.reason as string)) return null;
 		const occurrence = occurrenceOf(saved.occurrence);
 		if (!occurrence || (own(saved, "questionId") ? !text(saved.questionId) : saved.reason === "incompatible")) return null;
 		if (snapshot && (!samePluginQuestionOccurrence(occurrence, snapshot.occurrence) || (saved.questionId !== undefined && saved.questionId !== snapshot.questionId) || (saved.questionId === undefined && snapshot.questionId !== undefined))) return null;

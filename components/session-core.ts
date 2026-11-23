@@ -884,9 +884,14 @@ export class SessionModel {
 		const pluginPending = pendingPluginQuestionOf(this.base);
 		if (!pluginPending && pluginQuestionCallsOf(this.base).some(call => call.status === "unreadable")) return refused();
 		if (pluginPending) {
-			if (this.pluginQuestionAvailability?.questionId !== pluginPending.questionId || this.pluginQuestionAvailability.status !== "available") return refused();
-			if (input.type !== "plugin-question-answer" || input.questionId !== pluginPending.questionId || !samePluginQuestionOccurrence(input.occurrence, pluginPending.occurrence)) return refused();
-		} else if (input.type === "plugin-question-answer") return refused();
+			// A pause naming THIS question closes it without the plugin's code
+			// (owner, 2026-11-23), so it needs no plugin availability.
+			const pausesIt = input.type === "pause-question" && !!input.plugin && input.plugin.questionId === pluginPending.questionId && samePluginQuestionOccurrence(input.plugin.occurrence, pluginPending.occurrence);
+			if (!pausesIt) {
+				if (this.pluginQuestionAvailability?.questionId !== pluginPending.questionId || this.pluginQuestionAvailability.status !== "available") return refused();
+				if (input.type !== "plugin-question-answer" || input.questionId !== pluginPending.questionId || !samePluginQuestionOccurrence(input.occurrence, pluginPending.occurrence)) return refused();
+			}
+		} else if (input.type === "plugin-question-answer" || (input.type === "pause-question" && input.plugin)) return refused();
 		if (input.type === "plugin-problem-submission") {
 			const active = activeProblemOf(this.base)?.pluginProblem, occurrence = activeProblemOccurrenceOf(this.base);
 			if (!active || active.problemId !== input.problemId || !occurrence || !samePluginQuestionOccurrence(occurrence, input.occurrence) ||
@@ -962,8 +967,13 @@ export class SessionModel {
 			// The pause pair (reading-thinking send): the paused card and the
 			// learner's bubble render at once — the same appends the server
 			// writes ahead. A stale target refuses before anything posts.
-			try { optimistic.push(...pauseQuestionAppends({ messages: this.nativeHistory() }, input).map(message => ({ ...message, id: localId() }))); }
-			catch { this.setStatus("ready"); return refused(); }
+			// A plugin question closes server-side (validated there): only the
+			// learner's bubble shows at once; the paused card lands on sync.
+			if (input.plugin) optimistic.push({ ...newUserMessage(input.text, input.images), id: localId() });
+			else {
+				try { optimistic.push(...pauseQuestionAppends({ messages: this.nativeHistory() }, input).map(message => ({ ...message, id: localId() }))); }
+				catch { this.setStatus("ready"); return refused(); }
+			}
 		}
 		if (optimistic.length > 0) this.mutate(() => {
 			this.tail = [...this.tail, ...optimistic];

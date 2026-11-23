@@ -35,7 +35,7 @@ import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { getPluginAgentContributions, getPluginHost } from "./plugins.ts";
-import { preparePluginQuestionSubmission, reconcilePluginQuestionCompatibility, type QuestionTypeResolver } from "./plugin-questions.ts";
+import { preparePluginQuestionPause, preparePluginQuestionSubmission, reconcilePluginQuestionCompatibility, type QuestionTypeResolver } from "./plugin-questions.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { prepareSubmissionImages, prepareSubmissionImageChannels, prepareProblemSubmissionImageChannels, submissionImagePolicyKey } from "./submission-images.ts";
 import { preparePluginProblemSubmission, requirePluginProblemTarget, type ProblemTypeResolver } from "./plugin-problems.ts";
@@ -64,7 +64,7 @@ import { COMPACTION_RESERVE_TOKENS } from "../core/compaction.ts";
 import { catalogContextLimits, refreshConnectionCatalog } from "./model-catalog.ts";
 import { emit } from "../core/events.ts";
 import { settledTurnResponse } from "./turn-runs.ts";
-import { asAgentMessages, type LhMessage } from "../core/native-messages.ts";
+import { asAgentMessages, newUserMessage, type LhMessage } from "../core/native-messages.ts";
 import { QUESTION_TOOLS } from "../core/pending.ts";
 import {
 	ChatInputError,
@@ -187,6 +187,14 @@ setFileAccessPolicy(fileAccessPolicy);
  *  learner's message, exactly where a plain text send would carry them. */
 function resultFirst(appends: readonly LhMessage[], updates: readonly LhMessage[]): LhMessage[] {
 	return [...appends.slice(0, 1), ...updates, ...appends.slice(1)];
+}
+
+/** The submission's appends. A reading-thinking send on a PLUGIN question
+ *  (owner, 2026-11-23) closes it through the server's validated plugin-question
+ *  path as paused; the learner's message follows, as for built-in questions. */
+function appendsFor(record: { messages: LhMessage[] }, input: Parameters<typeof inputAppends>[1]): LhMessage[] {
+	if (input.type === "pause-question" && input.plugin) return [...preparePluginQuestionPause(record, input.plugin), newUserMessage(input.text, input.images)];
+	return inputAppends(record, input);
 }
 
 export async function handleChatRequest(
@@ -425,7 +433,7 @@ export async function handleChatInput(
 						const updates = sideConversationEntries({ messages: current.messages, sideChats: sideContext.snapshot(chatId) });
 						return updates.length ? [...current.messages, ...updates] : current.messages;
 					}
-					const next = input.type === "steers" ? input.steers.filter((entry) => !steerDelivered(current.messages, entry.id)) : inputAppends(current, input);
+					const next = input.type === "steers" ? input.steers.filter((entry) => !steerDelivered(current.messages, entry.id)) : appendsFor(current, input);
 					const after = [...current.messages, ...next];
 					if (hasUnresolvedQuestion(after)) return current.messages;
 					const updates = sideConversationEntries({ messages: current.messages, sideChats: sideContext.snapshot(chatId) }, after);
@@ -541,7 +549,7 @@ export async function handleChatInput(
 			} else appends = submission.finish({ id: chatId, kind: record.kind, messages: record.messages });
 		} else appends = input.type === "steers"
 			? input.steers.filter((s) => !steerDelivered(record.messages, s.id))
-			: inputAppends(record, input);
+			: appendsFor(record, input);
 	} catch (err) {
 		if (err instanceof ChatInputError) {
 			return Response.json({ error: err.message }, { status: 400 });

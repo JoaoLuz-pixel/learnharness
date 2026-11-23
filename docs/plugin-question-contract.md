@@ -179,6 +179,12 @@ Lost acknowledgment requires canonical reconciliation, not a guessed new submiss
 Dismissal/incompatibility produce honest host cancellation results, not learner answers,
 and do not automatically run the teacher. Next deliberate input follows normal wake rules.
 
+A learner may also **pause** an open question from the "Thinking while reading" box (in
+apps that have it): the host closes it with a cancellation whose `reason` is `paused`, then
+posts the learner's message, and the teacher replies in the same turn. A paused question
+was not answered: nothing reaches `validateAnswer`/grading. Readers of saved cancellations
+should treat unknown reasons as closed, not pending.
+
 ## 7. Frontend slots, drafts and lifetime
 
 `registerQuestionRenderer({id,supportedContractVersions,mountQuestion?,mountAnswerEditor,

@@ -166,6 +166,7 @@ export function preparePluginQuestionAnswer(record: { id: string; messages: LhMe
 function cancellation(occurrence: PluginQuestionOccurrence, questionId: string | undefined, reason: PluginQuestionCancellation["reason"]): LhMessage {
 	const details: PluginQuestionCancellation = { kind: "plugin-question-cancelled", ...(questionId ? { questionId } : {}), occurrence, reason };
 	const text = reason === "dismissed" ? "The learner dismissed this question without submitting an answer."
+		: reason === "paused" ? "The learner paused this question to send a message (it follows). It was not answered: do not grade it or treat it as a skip. Reply to the message, then decide whether to ask it again."
 		: reason === "incompatible" ? "The host cancelled this question because its plugin explicitly declared the saved contract incompatible."
 		: "The host cancelled this question because its saved host protocol is unreadable.";
 	return nativeResult(occurrence, details, text);
@@ -197,6 +198,13 @@ export function preparePluginQuestionDismissal(record: { messages: LhMessage[] }
 		(input.questionId !== undefined && input.questionId !== unreadable.questionId))
 		throw new ChatInputError("This question is no longer pending. Sync the saved session before trying again.");
 	return [cancellation(unreadable.occurrence, unreadable.questionId, "dismissed")];
+}
+
+/** The reading-thinking send on a PLUGIN question (owner, 2026-11-23): close
+ *  the exact current question as paused (the learner's message follows). */
+export function preparePluginQuestionPause(record: { messages: LhMessage[] }, input: { questionId: string; occurrence: PluginQuestionOccurrence }): LhMessage[] {
+	const snapshot = requireCurrent(record.messages, input);
+	return [cancellation(snapshot.occurrence, snapshot.questionId, "paused")];
 }
 
 /** Response-only readiness. Never persisted and never grants authority independently. */

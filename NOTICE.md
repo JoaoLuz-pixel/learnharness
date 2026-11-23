@@ -37,6 +37,8 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-22 | [`41e6e31`](https://github.com/JoaoLuz-pixel/learnharness/commit/41e6e31) | Uninstall dialog: no folder line; a plugin's stop reason shown in its own words. |
 | 2026-11-22 | (merge) | Merged the original's version 0.7.0 (sidebar folders, graph folder filter, transcript width and compact list, side-by-side questions, performance work, prompt editor, model list refresh, PDF figure tools, Drawing Pad improvements). Conflicts kept both sides: Device Sync's delete-everywhere approval also covers the new folder delete, and Device Sync starts alongside the new model-list refresh. |
 | 2026-11-22 | (release) | Version 0.7.1. |
+| 2026-11-23 | (this release) | The "Thinking while reading" send works on every open question, including plugin questions such as Coding Questions exercises: the question closes as paused (new plugin cancellation reason `paused`, never graded) and the learner's message follows. |
+| 2026-11-23 | (release) | Version 0.7.2. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 

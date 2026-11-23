@@ -589,6 +589,9 @@ export function Chat({
 	// The abort handler reads the pending question from a ref (the window
 	// listener is mount-scoped; the value it needs is render-scoped).
 	const pendingRef = useRef(pending);
+	// The open PLUGIN question, for the reading-thinking send (owner, 2026-11-23).
+	const pendingPluginRef = useRef(pendingPlugin);
+	pendingPluginRef.current = pendingPlugin;
 	pendingRef.current = pending;
 
 	// THE ACTIVE PRACTICE PROBLEM (practice sessions, 2026-10-04): the
@@ -688,11 +691,17 @@ export function Chat({
 	 * once; the text clears only when the server accepts it. */
 	const [pauseConfirmOpen, setPauseConfirmOpen] = useState(false);
 	const pauseAndSend = () => {
+		const plugin = pendingPluginRef.current;
 		const question = pendingRef.current;
 		const text = readingThinkingRef.current.trim();
 		const images = readingImagesRef.current.map(image => ({ ...image }));
-		if (!question || (!text && !images.length) || busyRef.current) return;
-		void send({ type: "pause-question", toolCallId: question.toolCallId, text, ...(images.length ? { images } : {}) }, () => {
+		if ((!plugin && !question) || (!text && !images.length) || busyRef.current) return;
+		// Any open question pauses (owner, 2026-11-23), a plugin's included: it
+		// is named exactly so the server can close that one as paused.
+		const target = plugin
+			? { toolCallId: plugin.occurrence.toolCallId, plugin: { questionId: plugin.questionId, occurrence: plugin.occurrence } }
+			: { toolCallId: question!.toolCallId };
+		void send({ type: "pause-question", ...target, text, ...(images.length ? { images } : {}) }, () => {
 			if (readingThinkingRef.current.trim() === text) clearReadingThinking();
 		});
 	};
@@ -2198,7 +2207,7 @@ export function Chat({
 					readingThinkingRevision={readingThinkingSeed.revision}
 					onReadingThinking={(value) => { applyReadingThinking(value); if (pendingPlugin) pluginQuestionDraft(pendingPlugin).readingThinking = value; }}
 					// Builtin questions only: plugin questions own their own protocol.
-					onSendReadingThinking={pending && !pendingPlugin ? requestPauseSend : undefined}
+					onSendReadingThinking={pending || pendingPlugin ? requestPauseSend : undefined}
 					readingImages={readingImages}
 					readingSendDisabled={busy || compacting || submissionRunner.occupied}
 					phase={phases.at(-1) ?? "probe"}

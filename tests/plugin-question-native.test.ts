@@ -17,8 +17,9 @@ const { preparePluginQuestionType, readPluginQuestionSnapshot } = await import("
 const { createProberAgent } = await import("../src/agent/teacher-agent.ts");
 const { runPiTurn } = await import("../src/server/pi/ui-stream.ts");
 const { newUserMessage, pendingPluginQuestionOf, toLlmMessages } = await import("../src/core/native-messages.ts");
-const { preparePluginQuestionAnswer, preparePluginQuestionDismissal, pluginQuestionCompatibilityAppends, pluginQuestionAvailabilityOf } = await import("../src/server/plugin-questions.ts");
-const { assertPluginQuestionInputAllowed } = await import("../src/core/input-events.ts");
+const { preparePluginQuestionAnswer, preparePluginQuestionDismissal, preparePluginQuestionPause, pluginQuestionCompatibilityAppends, pluginQuestionAvailabilityOf } = await import("../src/server/plugin-questions.ts");
+const { assertPluginQuestionInputAllowed, inputAppends, parseChatInput } = await import("../src/core/input-events.ts");
+const { readPluginQuestionCancellation } = await import("../src/core/plugin-questions.ts");
 const { projectView } = await import("../src/core/view.ts");
 const { SubscriptionRequestCycle } = await import("../src/agent/subscription-request-cycle.ts");
 const { persistTurn } = await import("../src/server/turn-service.ts");
@@ -266,3 +267,26 @@ test("chat-handler saves the genuine native answer before teacher construction, 
 		assert.equal(isTurnRunning(compatChat.id), false, "compatibility cancellation never runs the teacher");
 	} finally { global.__lhPlugins = previous; }
 });
+
+test("reading-thinking send pauses a PLUGIN question too (owner, 2026-11-23): closed as paused, never graded, message follows", async () => {
+	const { canonical } = await nativePose();
+	const snapshot = pendingPluginQuestionOf(canonical)!;
+	const target = { questionId: snapshot.questionId, occurrence: snapshot.occurrence };
+	const input = parseChatInput({ type: "pause-question", toolCallId: snapshot.occurrence.toolCallId, text: "Wait, what does this loop do?", plugin: target });
+	assert.deepEqual(input, { type: "pause-question", toolCallId: snapshot.occurrence.toolCallId, text: "Wait, what does this loop do?", plugin: target });
+	assert.throws(() => parseChatInput({ type: "pause-question", toolCallId: "other", text: "x", plugin: target }), /does not match/);
+	// The plugin-question gate lets ONLY a pause that names the question through.
+	assert.doesNotThrow(() => assertPluginQuestionInputAllowed(canonical, input));
+	assert.throws(() => assertPluginQuestionInputAllowed(canonical, { type: "pause-question", toolCallId: "call", text: "x" }));
+	// Core alone never closes a plugin question.
+	assert.throws(() => inputAppends({ messages: canonical }, input as never), /canonical server validation/);
+	const closed = preparePluginQuestionPause({ messages: canonical }, target);
+	assert.equal(closed.length, 1);
+	assert.equal((closed[0] as any).details.reason, "paused");
+	assert.equal((closed[0] as any).details.answer, undefined, "nothing submitted or graded");
+	assert.match(JSON.stringify((closed[0] as any).content), /paused this question to send a message/);
+	assert.equal(pendingPluginQuestionOf([...canonical, ...closed]), undefined, "no longer open");
+	assert.equal(readPluginQuestionCancellation((closed[0] as any).details, snapshot)?.reason, "paused", "saved pause reads back (not unreadable)");
+	assert.throws(() => preparePluginQuestionPause({ messages: [...canonical, ...closed] }, target), /no longer pending/, "stale target refused");
+});
+

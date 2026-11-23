@@ -81,7 +81,10 @@ export type ChatInput =
 	 *  question with a PAUSED result and post the learner's text as a
 	 *  plain message, atomically — one turn, the teacher replies and
 	 *  decides what comes next. Text only. */
-	| { type: "pause-question"; toolCallId: string; text: string; images?: ImageContent[] };
+	| { type: "pause-question"; toolCallId: string; text: string; images?: ImageContent[];
+		/** A PLUGIN question (owner, 2026-11-23): its exact identity; the server
+		 *  validates it and closes it as paused (core alone cannot). */
+		plugin?: { questionId: string; occurrence: PluginQuestionOccurrence } };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -205,6 +208,9 @@ export class ChatInputError extends Error {}
 export function assertPluginQuestionInputAllowed(messages: readonly LhMessage[], input: unknown): void {
 	const type = input && typeof input === "object" ? (input as { type?: unknown }).type : undefined;
 	if (type === "plugin-question-answer" || type === "dismiss-plugin-question") return;
+	// A pause that names the plugin question is its own way of closing it
+	// (validated server-side against the exact current question).
+	if (type === "pause-question" && (input as { plugin?: unknown }).plugin) return;
 	if (pluginQuestionCallsOf(messages).some(call => call.status === "answerable" || call.status === "unreadable")) {
 		throw new ChatInputError("Answer or dismiss the pending plugin question first");
 	}
@@ -305,7 +311,14 @@ export function parseChatInput(input: unknown): ChatInput {
 			if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) throw new ChatInputError("pause-question input requires toolCallId");
 			const images = parseImages(i.images);
 			if (typeof i.text !== "string" || (!i.text.trim() && !images)) throw new ChatInputError("pause-question input requires non-empty text or images");
-			return { type: "pause-question", toolCallId: i.toolCallId, text: i.text, ...(images ? { images } : {}) };
+			let plugin: { questionId: string; occurrence: PluginQuestionOccurrence } | undefined;
+			if (i.plugin !== undefined) {
+				const p = i.plugin as { questionId?: unknown; occurrence?: unknown } | null;
+				if (!p || typeof p.questionId !== "string" || !p.questionId) throw new ChatInputError("pause-question plugin target requires questionId");
+				plugin = { questionId: p.questionId, occurrence: parsePluginQuestionOccurrence(p.occurrence) };
+				if (plugin.occurrence.toolCallId !== i.toolCallId) throw new ChatInputError("pause-question plugin target does not match toolCallId");
+			}
+			return { type: "pause-question", toolCallId: i.toolCallId, text: i.text, ...(images ? { images } : {}), ...(plugin ? { plugin } : {}) };
 		}
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
@@ -342,6 +355,7 @@ export function inputAppends(
 			return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
 		}
 		case "pause-question":
+			if (input.plugin) throw new ChatInputError("Plugin question pause requires canonical server validation");
 			return pauseQuestionAppends(record, input);
 		case "continue":
 			return dismissalConclusion(record);
