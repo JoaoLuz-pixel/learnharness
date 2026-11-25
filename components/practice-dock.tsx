@@ -12,6 +12,9 @@ import { isInteractionScopeEligible } from "./plugin-input-focus";
 import { PathInput } from "@/components/path-input";
 import type { PrepareThinkingSubmission } from "./plugin-submission-adapters";
 import { cn } from "@/lib/utils";
+import { AttachFilesButton } from "./attach-files-button";
+import { attachmentBoxProps, pasteAttachmentProps } from "./attachment-box";
+import { StagedImageStrip, type StagedImages } from "./staged-images";
 
 /**
  * The practice dock (practice sessions, owner design 2026-10-04): an
@@ -63,9 +66,12 @@ export interface PracticeDockProps {
 	 *  and say so in the hint row. The server registry is the real gate;
 	 *  this is the affordance. */
 	compactionRunning?: boolean;
+	/** Images staged in "Your thinking" (fork, 2026-11-25): paste, drop or the
+	 *  paperclip. They ride the thinking submission; images alone can send. */
+	images?: StagedImages;
 }
 
-export function PracticeDock({ viewReader, problemCallId, input, expanded, onExpand, onSubmit, onPrepareSubmission, customInput, hasPendingInput = false, preparing = false, onEscape, compactionRunning = false }: PracticeDockProps) {
+export function PracticeDock({ viewReader, problemCallId, input, expanded, onExpand, onSubmit, onPrepareSubmission, customInput, hasPendingInput = false, preparing = false, onEscape, compactionRunning = false, images }: PracticeDockProps) {
 	const controller = useOptionalInteractionLayers();
 	const rootRef = useRef<HTMLElement>(null);
 	const [nativeThinking, setNativeThinking] = useState("");
@@ -77,6 +83,8 @@ export function PracticeDock({ viewReader, problemCallId, input, expanded, onExp
 	// the tail, never a stale closure.
 	const thinkingRef = useRef(thinking); thinkingRef.current = thinking;
 	const editRevision = useRef(0);
+	const fieldRef = useRef<HTMLDivElement>(null);
+	const hasImages = (images?.images.length ?? 0) > 0;
 	useLayoutEffect(() => {
 		if (!viewReader) return;
 		const read = () => thinkingRef.current;
@@ -101,7 +109,7 @@ export function PracticeDock({ viewReader, problemCallId, input, expanded, onExp
 		if (compactionRunning || preparing) return;
 		const prepare = customInput?.prepare ?? onPrepareSubmission;
 		if (prepare) {
-			if (customInput ? !customInput.ready : (!thinkingRef.current.trim() && !hasPendingInput)) return;
+			if (customInput ? !customInput.ready : (!thinkingRef.current.trim() && !hasPendingInput && !images?.imagesRef.current.length)) return;
 			let capturedRevision = editRevision.current;
 			prepare(() => { capturedRevision = editRevision.current; return customInput ? thinkingRef.current : thinkingRef.current.trim(); }, captured => {
 				if (editRevision.current === capturedRevision && (customInput ? thinkingRef.current : thinkingRef.current.trim()) === captured) { thinkingRef.current = ""; setThinking(""); }
@@ -160,11 +168,15 @@ export function PracticeDock({ viewReader, problemCallId, input, expanded, onExp
 			<div
 				data-testid="practice-thinking-field"
 				className="m-1.5 rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
+				{...attachmentBoxProps(fieldRef, images)}
 			>
 				<div className="px-2.5 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					YOUR THINKING
 				</div>
+				{images && <div className="px-1.5"><StagedImageStrip images={images.images} onRemove={images.remove} notice={images.notice} onDismissNotice={images.dismissNotice} /></div>}
 				<PathInput
+					ref={fieldRef}
+					{...pasteAttachmentProps(images)}
 					value={thinking}
 					onValueChange={(value) => {
 						thinkingRef.current = value; editRevision.current++;
@@ -201,15 +213,19 @@ export function PracticeDock({ viewReader, problemCallId, input, expanded, onExp
 					<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
 						{compactionRunning ? "compacting session…" : "↵ submits · ⇧↵ newline"}
 					</span>
-					<Button
-						type="button"
-						data-testid="practice-send"
-						disabled={(customInput ? !customInput.ready : (!thinking.trim() && !hasPendingInput)) || compactionRunning || preparing}
-						onClick={() => submit()}
-						className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
-					>
-						{customInput ? "Submit" : "Submit thinking"}
-					</Button>
+					{/* Paperclip just left of Submit in "Your thinking" (fork, 2026-11-25). */}
+					<div className="ml-auto flex items-center gap-1">
+						<AttachFilesButton editorRef={fieldRef} compact />
+						<Button
+							type="button"
+							data-testid="practice-send"
+							disabled={(customInput ? !customInput.ready : (!thinking.trim() && !hasPendingInput && !hasImages)) || compactionRunning || preparing}
+							onClick={() => submit()}
+							className="h-9 rounded-[6px] px-3.5 text-sm font-medium"
+						>
+							{customInput ? "Submit" : "Submit thinking"}
+						</Button>
+					</div>
 				</div>
 			</div>
 			</div>

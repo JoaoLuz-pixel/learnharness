@@ -680,6 +680,12 @@ export function Chat({
 	 * channel or the pause send, and reset when the question changes. */
 	const readingImages = useStagedImages();
 	const { imagesRef: readingImagesRef, setImages: setReadingImages } = readingImages;
+	/* Images in "Your thinking" (fork, 2026-11-25): one set for the open
+	 * question (built-in or plugin) and one for the open practice problem.
+	 * They ride the submission's thinking image channel and reset when the
+	 * question/problem changes; not kept through a reload (like the reading box). */
+	const questionThinkingImages = useStagedImages();
+	const problemThinkingImages = useStagedImages();
 	const clearReadingThinking = useCallback(() => {
 		readingThinkingRef.current = "";
 		setReadingImages([], false);
@@ -725,6 +731,21 @@ export function Chat({
 				: { questionId: pendingQuestionId, value, revision: previous.revision + 1 },
 		);
 	}, [pendingQuestionId, questionDraft, pluginQuestionDraft, setReadingImages]);
+	const thinkingImagesQuestion = useRef<string | null>(null);
+	const { setImages: setQuestionThinkingImages } = questionThinkingImages;
+	useLayoutEffect(() => {
+		if (thinkingImagesQuestion.current === pendingQuestionId) return;
+		thinkingImagesQuestion.current = pendingQuestionId;
+		setQuestionThinkingImages([], false);
+	}, [pendingQuestionId, setQuestionThinkingImages]);
+	const activeProblemKey = activeProblemOccurrence ? JSON.stringify(activeProblemOccurrence) : null;
+	const thinkingImagesProblem = useRef<string | null>(null);
+	const { setImages: setProblemThinkingImages } = problemThinkingImages;
+	useLayoutEffect(() => {
+		if (thinkingImagesProblem.current === activeProblemKey) return;
+		thinkingImagesProblem.current = activeProblemKey;
+		setProblemThinkingImages([], false);
+	}, [activeProblemKey, setProblemThinkingImages]);
 
 	// The phase at every message (one linear fold): the transcript draws a
 	// color-coded dotted divider at each boundary; the header chip reads the
@@ -807,7 +828,7 @@ export function Chat({
 				...(raw.dontKnow !== undefined ? { dontKnow: raw.dontKnow } : {}), ...(raw.values !== undefined ? { values: raw.values } : {}),
 				...(raw.other !== undefined ? { other: raw.other } : {}), ...(raw.text !== undefined ? { text: raw.text } : {}),
 				...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}), images: [],
-			}, thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: requiresReveal ? readingThinkingRef.current : "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
+			}, thinking: { text: raw.thinking ?? "", images: questionThinkingImages.imagesRef.current.map(image => ({ ...image })) }, readingThinking: { text: requiresReveal ? readingThinkingRef.current : "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
 		}, () => {
 			const now = pendingQuestionOf(submissionLive.current.nativeMessages);
 			return isCurrent() && !busyRef.current && now?.messageId === original.messageId && now.contentIndex === original.contentIndex && now.toolCallId === original.toolCallId && now.tool === original.tool;
@@ -830,12 +851,12 @@ export function Chat({
 	const prepareThinking: PrepareThinkingSubmission = (capture, clear) => {
 		const target = thinkingTarget();
 		if (!target || busyRef.current || compacting) return;
-		let captured = "";
-		void runSubmission(target, () => ({ type: "thinking", content: { text: captured = capture(), images: [] } }), () => !busyRef.current && JSON.stringify(activeProblemOccurrenceOf(submissionLive.current.nativeMessages)) === JSON.stringify(target.problem.occurrence), async (prepared, attempt) => {
+		let captured = "", capturedImages: ImageContent[] = [];
+		void runSubmission(target, () => ({ type: "thinking", content: { text: captured = capture(), images: (capturedImages = problemThinkingImages.imagesRef.current.map(image => ({ ...image }))).map(image => ({ ...image })) } }), () => !busyRef.current && JSON.stringify(activeProblemOccurrenceOf(submissionLive.current.nativeMessages)) === JSON.stringify(target.problem.occurrence), async (prepared, attempt) => {
 			if (prepared.type !== "thinking") return false;
 			if (!prepared.content.text.trim() && !prepared.content.images.length) throw new Error("Thinking text or images are required. Your input has been kept.");
 			attempt.deliver();
-			return send({ type: "thinking", problemCallId: target.problem.occurrence.toolCallId, occurrence: target.problem.occurrence, text: prepared.content.text, ...(prepared.content.images.length ? { images: prepared.content.images.map(image => ({ ...image })) } : {}) }, () => { clear(captured); attempt.accepted(); }, undefined, attempt.refused);
+			return send({ type: "thinking", problemCallId: target.problem.occurrence.toolCallId, occurrence: target.problem.occurrence, text: prepared.content.text, ...(prepared.content.images.length ? { images: prepared.content.images.map(image => ({ ...image })) } : {}) }, () => { clear(captured); problemThinkingImages.clearIfUnchanged(capturedImages); attempt.accepted(); }, undefined, attempt.refused);
 		});
 	};
 	const pluginProblemTarget = (): Extract<PluginSubmissionTarget, { type: "plugin-problem-submission" }> | undefined => {
@@ -847,16 +868,18 @@ export function Chat({
 	const preparePluginProblem: PreparePluginProblemSubmission = (capture, isCurrent, onAccepted) => {
 		const original = activeProblem?.pluginProblem, occurrence = activeProblemOccurrence, target = pluginProblemTarget();
 		if (!target || !original || !occurrence || busyRef.current || compacting) return Promise.resolve(false);
+		let capturedImages: ImageContent[] = [];
 		return runSubmission(target, () => {
 			const raw = capture();
-			return { type: "plugin-problem-submission", submission: raw.submission, submissionImages: [], thinking: { text: raw.thinking ?? "", images: [] } };
+			capturedImages = problemThinkingImages.imagesRef.current.map(image => ({ ...image }));
+			return { type: "plugin-problem-submission", submission: raw.submission, submissionImages: [], thinking: { text: raw.thinking ?? "", images: capturedImages.map(image => ({ ...image })) } };
 		}, () => isCurrent() && !busyRef.current && activeProblemOf(submissionLive.current.nativeMessages)?.pluginProblem?.problemId === original.problemId, async (prepared, attempt) => {
 			if (prepared.type !== "plugin-problem-submission") return false;
 			const images = { ...(prepared.submissionImages.length ? { submission: prepared.submissionImages } : {}), ...(prepared.thinking.images.length ? { thinking: prepared.thinking.images } : {}) };
 			attempt.deliver();
 			return send({ type: "plugin-problem-submission", problemId: original.problemId, occurrence, submission: prepared.submission as Extract<ChatInput, { type: "plugin-problem-submission" }>["submission"],
 				thinking: prepared.thinking.text, ...(Object.keys(images).length ? { images } : {}),
-			}, () => { onAccepted(); attempt.accepted(); }, undefined, attempt.refused);
+			}, () => { onAccepted(); problemThinkingImages.clearIfUnchanged(capturedImages); attempt.accepted(); }, undefined, attempt.refused);
 		});
 	};
 	const pluginQuestionTarget = (): Extract<PluginSubmissionTarget, { type: "plugin-question-answer" }> | undefined => {
@@ -873,7 +896,7 @@ export function Chat({
 		const original = pendingPlugin;
 		return runSubmission(target, () => {
 			const raw = capture();
-			return { type: "plugin-question-answer", answer: raw.answer, answerImages: [], thinking: { text: raw.thinking ?? "", images: [] }, readingThinking: { text: raw.readingThinking ?? "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
+			return { type: "plugin-question-answer", answer: raw.answer, answerImages: [], thinking: { text: raw.thinking ?? "", images: original.showThinking ? questionThinkingImages.imagesRef.current.map(image => ({ ...image })) : [] }, readingThinking: { text: raw.readingThinking ?? "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
 		}, () => isCurrent() && !busyRef.current && pendingPluginQuestionOf(submissionLive.current.nativeMessages)?.questionId === original.questionId, async (prepared, attempt) => {
 			if (prepared.type !== "plugin-question-answer") return false;
 			const images = submissionImages(prepared, target.channels);
@@ -2194,7 +2217,7 @@ export function Chat({
 						snapshot: activeProblem.pluginProblem, occurrence: activeProblemOccurrence, chatId, draft: pluginProblemDraft(activeProblem.pluginProblem),
 						available: pluginProblemAvailability?.problemId === activeProblem.pluginProblem.problemId && pluginProblemAvailability.status === "available",
 						ready: !busy && !compacting && reconciliation === "ready", reconciliation: activeProblemOf(canonicalMessages)?.pluginProblem?.problemId === activeProblem.pluginProblem.problemId ? reconciliation : "syncing",
-						prepareSubmission: preparePluginProblem, send, preparing: submissionRunner.occupied || !!remoteLock, compactionRunning: compacting, onEscape: dictation.cancel,
+						prepareSubmission: preparePluginProblem, send, preparing: submissionRunner.occupied || !!remoteLock, compactionRunning: compacting, onEscape: dictation.cancel, thinkingImages: problemThinkingImages,
 					} : undefined}
 					compactionRunning={compacting}
 					onSubmitThinking={submitThinking}
@@ -2209,6 +2232,8 @@ export function Chat({
 					// Builtin questions only: plugin questions own their own protocol.
 					onSendReadingThinking={pending || pendingPlugin ? requestPauseSend : undefined}
 					readingImages={readingImages}
+					questionThinkingImages={questionThinkingImages}
+					problemThinkingImages={problemThinkingImages}
 					readingSendDisabled={busy || compacting || submissionRunner.occupied}
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
@@ -2529,6 +2554,8 @@ export function DockOverlay({
 	onSendReadingThinking,
 	readingSendDisabled = false,
 	readingImages,
+	questionThinkingImages,
+	problemThinkingImages,
 	phase,
 	turns,
 	contextTokens,
@@ -2594,6 +2621,9 @@ export function DockOverlay({
 	readingSendDisabled?: boolean;
 	/** Images staged in the reading box (paste + drop onto the box). */
 	readingImages?: StagedImages;
+	/** "Your thinking" images (fork, 2026-11-25): the open question's and the open problem's. */
+	questionThinkingImages?: StagedImages;
+	problemThinkingImages?: StagedImages;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
 	/** The session's usage log — the stats bar beneath the composer folds it. */
@@ -3086,7 +3116,7 @@ export function DockOverlay({
 							className={mode === initialModeRef.current ? "flow-root" : "flow-root dock-variant"}
 						>
 							{pluginQuestion && pluginDraft ? (
-								<PluginQuestionDock viewReader={customViewReader} snapshot={pluginQuestion} chatId={chatId} draft={pluginDraft} expanded={expanded} reveal={revealPending} onExpand={expandAndReveal} ready={pluginReady} available={pluginAvailable} reconciliation={reconciliation} readingRef={readingInputRef} onMicAvailable={onPluginMicAvailable} send={onPluginSend} dismiss={onPluginDismiss} prepareSubmission={onPreparePluginQuestion} />
+								<PluginQuestionDock viewReader={customViewReader} thinkingImages={questionThinkingImages} snapshot={pluginQuestion} chatId={chatId} draft={pluginDraft} expanded={expanded} reveal={revealPending} onExpand={expandAndReveal} ready={pluginReady} available={pluginAvailable} reconciliation={reconciliation} readingRef={readingInputRef} onMicAvailable={onPluginMicAvailable} send={onPluginSend} dismiss={onPluginDismiss} prepareSubmission={onPreparePluginQuestion} />
 							) : unreadablePlugin ? (
 								<div className="px-4 py-3">
 									{reconciliation === "syncing" && <p role="status" className="text-sm text-muted-foreground">Preparing question…</p>}
@@ -3110,6 +3140,7 @@ export function DockOverlay({
 									onSaveDraft={onSaveQuestionDraft}
 									workingRef={workingRef}
 									onEscape={dictationCancel}
+									thinkingImages={questionThinkingImages}
 									dictationClaim={!revealPending}
 									compactionRunning={compactionRunning}
 									layoutRequest={layoutRequest}
@@ -3130,6 +3161,7 @@ export function DockOverlay({
 									onSubmit={onSubmitThinking}
 									onPrepareSubmission={onPrepareThinking}
 									hasPendingInput={pendingThinkingInput}
+									images={problemThinkingImages}
 									preparing={preparing}
 									onEscape={dictationCancel}
 									compactionRunning={compactionRunning}

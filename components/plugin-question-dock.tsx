@@ -17,6 +17,9 @@ import { createQuestionEditorLease, type QuestionEditorLease } from "./plugin-qu
 import { PluginQuestionPresentation, questionMountContext } from "./plugin-question-slots";
 import type { PreparePluginQuestionSubmission } from "./plugin-submission-adapters";
 import { Button } from "./ui/button";
+import { AttachFilesButton } from "./attach-files-button";
+import { attachmentBoxProps, pasteAttachmentProps } from "./attachment-box";
+import { StagedImageStrip, type StagedImages } from "./staged-images";
 
 const keyOf = (snapshot: PluginQuestionSnapshot) => pluginQuestionOccurrenceKey(snapshot.occurrence);
 
@@ -26,6 +29,9 @@ interface PluginQuestionDockProps {
 	prepareSubmission?: PreparePluginQuestionSubmission;
 	ready: boolean; reconciliation: "ready" | "syncing" | "failed"; available: boolean; readingRef: RefObject<HTMLDivElement | null>;
 	onMicAvailable(available: boolean): void; send(input: ChatInput): Promise<boolean>; dismiss(): Promise<void>;
+	/** Images staged in "Your thinking" (fork, 2026-11-25), only when the plugin
+	 *  shows that field; they ride the answer's thinking image channel. */
+	thinkingImages?: StagedImages;
 }
 export function PluginQuestionDock(props: PluginQuestionDockProps) {
 	const { snapshot: plugins } = usePlugins();
@@ -34,7 +40,7 @@ export function PluginQuestionDock(props: PluginQuestionDockProps) {
 }
 
 /** Host-only component seam for deterministic DOM/capture fixtures, not SDK. */
-export function PluginQuestionDockContent({ viewReader, snapshot, chatId, draft, expanded, reveal, onExpand, ready, reconciliation, available, readingRef, onMicAvailable, send, dismiss, registration, prepareSubmission }: PluginQuestionDockProps & { registration?: QuestionRendererRegistration }) {
+export function PluginQuestionDockContent({ viewReader, snapshot, chatId, draft, expanded, reveal, onExpand, ready, reconciliation, available, readingRef, onMicAvailable, send, dismiss, registration, prepareSubmission, thinkingImages }: PluginQuestionDockProps & { registration?: QuestionRendererRegistration }) {
 	const controller = useOptionalInteractionLayers();
 	const root = useRef<HTMLDivElement>(null);
 	const editor = useRef<HTMLDivElement>(null);
@@ -157,10 +163,12 @@ export function PluginQuestionDockContent({ viewReader, snapshot, chatId, draft,
 			{/* Plugin DOM is intentionally outside the footer's native form. */}
 			<form onSubmit={event => { event.preventDefault(); void submit(); }} className="border-t border-border/60 p-1.5">
 				<div data-testid={snapshot.showThinking ? "thinking-field" : undefined}
-					className={snapshot.showThinking ? "rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50" : undefined}>
+					className={snapshot.showThinking ? "rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50" : undefined}
+					{...(snapshot.showThinking ? attachmentBoxProps(thinking, thinkingImages) : {})}>
 					{snapshot.showThinking && <>
 						<div className="px-2.5 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Your thinking</div>
-						<PathInput ref={thinking} value={draft.thinking} onValueChange={value => { draft.thinking = value; render(); }} onKeyDown={event => {
+						{thinkingImages && <div className="px-1.5"><StagedImageStrip images={thinkingImages.images} onRemove={thinkingImages.remove} notice={thinkingImages.notice} onDismissNotice={thinkingImages.dismissNotice} /></div>}
+						<PathInput ref={thinking} {...pasteAttachmentProps(thinkingImages)} value={draft.thinking} onValueChange={value => { draft.thinking = value; render(); }} onKeyDown={event => {
 							if (composingQuestionKey(event) || pluginQuestionKeySuppressed(event)) return;
 							if (!isInteractionScopeEligible(event.currentTarget, controller)) return;
 							if (event.key === "Enter" && !event.altKey && (!event.shiftKey || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
@@ -169,7 +177,11 @@ export function PluginQuestionDockContent({ viewReader, snapshot, chatId, draft,
 					<div className="flex items-center justify-between gap-2 p-1">
 						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">↵ submits · ⇧↵ newline</span>
 						{unavailable && <Button type="button" variant="ghost" disabled={!ready || submitting} onClick={() => { if (latch.current) return; latch.current = true; void finishDictation().then(dismiss).catch(() => {}).finally(() => { latch.current = false; }); }}>Dismiss question</Button>}
-						<Button type="submit" disabled={!canSubmit} className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium">Submit answer</Button>
+						{/* Paperclip just left of Submit in "Your thinking" (fork, 2026-11-25). */}
+						<div className="ml-auto flex items-center gap-1">
+							{snapshot.showThinking && <AttachFilesButton editorRef={thinking} compact />}
+							<Button type="submit" disabled={!canSubmit} className="h-9 rounded-[6px] px-3.5 text-sm font-medium">Submit answer</Button>
+						</div>
 					</div>
 				</div>
 			</form>

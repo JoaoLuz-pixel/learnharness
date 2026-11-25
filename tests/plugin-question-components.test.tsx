@@ -523,11 +523,21 @@ for (const check of [false, true]) test(`healthy ${check ? "teach" : "probe"} th
 	assert.ok(submit); assert.equal(submit.disabled, false);
 	assert.equal(submit.textContent, "Submit answer");
 	assert.equal(input.classList.contains("min-h-[4.5rem]"), false, "even teaching starts with the approved compact field");
-	const hint = submit.parentElement?.querySelector('span[aria-hidden="true"]')!;
+	// Bottom row: hint left; on the right one group = paperclip, then Submit
+	// (fork, 2026-11-25: attachments in "Your thinking").
+	const group = submit.parentElement!;
+	for (const token of ["ml-auto", "flex", "items-center", "gap-1"]) assert.ok(group.classList.contains(token), token);
+	const row = group.parentElement!;
+	assert.ok(row.classList.contains("p-1"));
+	const hint = row.querySelector('span[aria-hidden="true"]')!;
 	assert.ok(hint); assert.equal(hint.textContent, "↵ submits · ⇧↵ newline");
 	for (const token of ["pl-1.5", "text-xs", "text-muted-foreground"]) assert.ok(hint.classList.contains(token), token);
-	assert.ok(submit.parentElement?.classList.contains("p-1"));
-	for (const token of ["ml-auto", "h-9", "rounded-[6px]", "px-3.5", "text-sm", "font-medium"]) assert.ok(submit.classList.contains(token), token);
+	const clip = group.querySelector('[data-testid="attach-files"]')!;
+	assert.ok(clip, "the paperclip sits in the Submit group");
+	assert.ok(group.firstElementChild?.contains(clip), "paperclip comes first in the group");
+	assert.equal(group.lastElementChild, submit, "Submit comes last");
+	for (const token of ["size-7", "rounded-md"]) assert.ok(clip.classList.contains(token), token);
+	for (const token of ["h-9", "rounded-[6px]", "px-3.5", "text-sm", "font-medium"]) assert.ok(submit.classList.contains(token), token);
 	assert.equal(document.getElementById("plugin-editor")?.closest("form"), null, "arbitrary plugin DOM stays outside the host form");
 	assert.equal(Array.from(document.querySelectorAll("button")).some(button => button.textContent === "Dismiss question"), false);
 	assert.equal(f.state.dismissed, 0);

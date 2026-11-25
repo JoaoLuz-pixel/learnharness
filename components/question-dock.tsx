@@ -1,5 +1,8 @@
 "use client";
 
+import { AttachFilesButton } from "./attach-files-button";
+import { attachmentBoxProps, pasteAttachmentProps } from "./attachment-box";
+import { StagedImageStrip, type StagedImages } from "./staged-images";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ViewReaderRef, NativeQuestionViewState } from "./session-view-readers";
 import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
@@ -216,6 +219,10 @@ export interface QuestionDockProps {
 	 *  and say so in the hint row. The server registry is the real gate;
 	 *  this is the affordance. */
 	compactionRunning?: boolean;
+	/** Images staged in "Your thinking" (fork, 2026-11-25): paste, drop or the
+	 *  paperclip; they ride the answer's thinking image channel. Select
+	 *  modes only — free-text "Your answer" keeps text + file chips. */
+	thinkingImages?: StagedImages;
 	/** Adaptive layout (Appearance → Adapt question layout); null/absent = off. */
 	layoutRequest?: QuestionLayoutRequest | null;
 	/** Reports the solved layout (null when off or unmounted). */
@@ -240,6 +247,7 @@ export function QuestionDock({
 	phase = "probe",
 	dictationClaim = true,
 	compactionRunning = false,
+	thinkingImages,
 	workingRef,
 	layoutRequest,
 	onLayout,
@@ -297,6 +305,7 @@ export function QuestionDock({
 					initialDraft={initialDraft}
 					onSaveDraft={onSaveDraft}
 					onEscape={onEscape}
+					thinkingImages={thinkingImages}
 					workingRef={workingRef}
 					dictationClaim={dictationClaim}
 					compactionRunning={compactionRunning}
@@ -394,6 +403,7 @@ function QuestionDockForm({
 	onEscape,
 	dictationClaim = true,
 	compactionRunning = false,
+	thinkingImages,
 	workingRef,
 	layoutRequest,
 	onLayout,
@@ -1123,10 +1133,12 @@ function QuestionDockForm({
 				<div
 					data-testid={qd.mode === "text" ? "answer-field" : "thinking-field"}
 					className="rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
+					{...(qd.mode === "text" ? {} : attachmentBoxProps(thinkingRef, thinkingImages))}
 				>
 					<div className="px-2.5 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 						{qd.mode === "text" ? "Your answer" : "YOUR THINKING"}
 					</div>
+					{qd.mode !== "text" && thinkingImages && <div className="px-1.5"><StagedImageStrip images={thinkingImages.images} onRemove={thinkingImages.remove} notice={thinkingImages.notice} onDismissNotice={thinkingImages.dismissNotice} /></div>}
 					{qd.mode === "text" ? (
 						<PathInput
 							value={text}
@@ -1159,6 +1171,7 @@ function QuestionDockForm({
 					) : (
 						<PathInput
 							ref={thinkingRef}
+							{...pasteAttachmentProps(thinkingImages)}
 							value={thinking}
 							onValueChange={(value) => {
 								thinkingTextRef.current = value;
@@ -1197,13 +1210,17 @@ function QuestionDockForm({
 						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
 								{compactionRunning ? "compacting session…" : "↵ submits · ⇧↵ newline"}
 						</span>
-						<Button
-							type="submit"
-							disabled={!canSubmit || compactionRunning || preparing}
-							className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
-						>
-							Submit answer
-						</Button>
+						{/* Paperclip just left of Submit in "Your thinking" (fork, 2026-11-25). */}
+						<div className="ml-auto flex items-center gap-1">
+							{qd.mode !== "text" && <AttachFilesButton editorRef={thinkingRef} compact />}
+							<Button
+								type="submit"
+								disabled={!canSubmit || compactionRunning || preparing}
+								className="h-9 rounded-[6px] px-3.5 text-sm font-medium"
+							>
+								Submit answer
+							</Button>
+						</div>
 					</div>
 				</div>
 			</form>

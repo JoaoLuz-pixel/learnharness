@@ -3,12 +3,11 @@
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { composingQuestionKey, pluginQuestionKeySuppressed } from "./plugin-question-keys";
-import { INSERT_FILE_PATHS_EVENT, PathInput } from "@/components/path-input";
+import { PathInput } from "@/components/path-input";
 import { CornerDownLeftIcon } from "lucide-react";
 import { StagedImageStrip, type StagedImages } from "./staged-images";
-import { imageFilesOf } from "./composer-images";
 import { AttachFilesButton } from "./attach-files-button";
-import { BROWSER_NOTICE, UNRESOLVED_PASTE_NOTICE, pastedFilePaths } from "./pasted-files";
+import { attachmentBoxProps, pasteAttachmentProps } from "./attachment-box";
 import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 
@@ -83,25 +82,11 @@ export function ReadingThinkingField({
 	return (
 		<div
 			data-testid="reading-thinking-field"
-			/* The paperclip menu opens above this box, not the main bar. */
-			data-attachment-composer=""
 			className="pointer-events-auto mb-2 rounded-2xl border bg-card/60 px-3 py-2 transition-colors focus-within:border-primary/50"
-			/* A drop ON the box stays in the box; the chat-wide drop zone sees
-			   defaultPrevented and only clears its indicator. Images go to the
-			   strip; documents become path chips here (owner, 2026-11-16). */
-			onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
-			onDrop={(e) => {
-				const files = Array.from(e.dataTransfer.files);
-				if (!files.length) return; // not files: the usual drop handling applies
-				e.preventDefault();
-				const resolve = window.lh?.getPathForFile;
-				const documents = pastedFilePaths(e.dataTransfer, resolve);
-				if (documents.paths.length) editorRef.current?.dispatchEvent(new CustomEvent(INSERT_FILE_PATHS_EVENT, { detail: documents.paths }));
-				const notice = documents.unresolved ? (resolve ? UNRESOLVED_PASTE_NOTICE : BROWSER_NOTICE) : "";
-				const picked = images ? imageFilesOf(files) : [];
-				if (images && picked.length) void images.add(picked, notice);
-				else if (notice) images?.setNotice(notice);
-			}}
+			/* Drops ON the box stay in it (images to the strip, documents as
+			   path chips) and its paperclip menu opens above it: attachment-box.ts,
+			   shared with every "Your thinking" field. */
+			{...attachmentBoxProps(editorRef, images)}
 		>
 			<div className="pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				Thinking while reading
@@ -111,8 +96,7 @@ export function ReadingThinkingField({
 				ref={editorRef}
 				value={draft}
 				onValueChange={applyDraft}
-				onPasteImages={images ? (files, notice) => { void images.add(files, notice); } : undefined}
-				onPasteNotice={images?.setNotice}
+				{...pasteAttachmentProps(images)}
 				/* py-0.5 (owner round, 2026-10-07): the scrollbar fix. Source
 				   Sans 3's font box is 22px at 16px; lh-input's 1.25 leading
 				   gives a 20px line box — the content area sticks 1px below the
