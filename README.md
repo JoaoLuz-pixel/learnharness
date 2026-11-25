@@ -27,7 +27,6 @@ On top of LearnHarness 0.7.0, including its sidebar folders and performance work
 - **"Thinking while reading" send:** post a remark or question at any time; the open question is paused and the teacher responds.
 - **Device Sync:** shared learning progress across your devices, through an SSH endpoint you control. One endpoint can hold several syncs: a device joins one or creates its own, and can change sync later.
 - **Community plugins from a file:** install a plugin from its `.zip` (button or drag and drop), see each plugin's version, update plugins from their GitHub releases, and uninstall them. Plugins can react to being uninstalled (`ctx.onUninstall`).
-- **Faster session opening:** long sessions show their latest messages first.
 - **Settings that survive restarts:** "Don't ask again", unsent drafts and keyboard shortcuts.
 - **Native Windows ARM64 build** for Windows on ARM PCs.
 
