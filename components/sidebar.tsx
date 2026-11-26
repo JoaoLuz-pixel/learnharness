@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteFolderDialog, DeleteSessionDialog, folderDeleteCopy, type DeleteDialogCopy } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode, ThemeMode } from "@/src/core";
-import { DumbbellIcon, FolderPlusIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { DumbbellIcon, FolderPlusIcon, NotebookPen, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -80,6 +80,8 @@ declare global {
 			getPathForFile?: (file: File) => string;
 			/** Choose one original directory path, without reading its contents. */
 			chooseAttachmentFolder?: () => Promise<string | null>;
+			/** Print a cheat sheet's page to PDF and ask where to save it. */
+			saveCheatSheetPdf?: (html: string, fileName: string) => Promise<{ saved: boolean; path?: string }>;
 			/** External Next desktop-dev uses the server's web connections. */
 			subscriptionTransport?: "desktop" | "web";
 			openSubscriptionBrowser?: (action: string) => Promise<void>;
@@ -314,11 +316,14 @@ export function SessionRow({
 	onContextMenu,
 	depth = 0,
 	compact = false,
+	onOpenCheatSheet,
 }: {
 	chat: ChatListItem;
 	compact?: boolean;
 	active: boolean;
 	onOpen: () => void;
+	/** Open this session's cheat sheet (owner, 2026-11-26: icon on every row). */
+	onOpenCheatSheet?: () => void;
 	/** Folder depth in the sidebar tree (0 = unfiled). */
 	depth?: number;
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
@@ -353,6 +358,14 @@ export function SessionRow({
 			{(chat.kind ?? "teach") === "practice" && (
 				<DumbbellIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Practice session" />
 			)}
+			{/* A span inside the row button (no nested <button>); the session's
+			    top bar has the keyboard-reachable Cheat sheet button. */}
+			{onOpenCheatSheet && <span role="button" tabIndex={-1} aria-label={`Open the cheat sheet for ${chat.title}`} title="Cheat sheet"
+				data-testid="session-cheatsheet"
+				onClick={(e) => { e.stopPropagation(); e.preventDefault(); onOpenCheatSheet(); }}
+				className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground">
+				<NotebookPen aria-hidden="true" className="size-3.5" />
+			</span>}
 		</button>
 	);
 }
@@ -774,12 +787,13 @@ function SessionsSidebar() {
 							chat={c}
 							depth={depth}
 							compact={compactSessionList}
-							active={pathname === `/chat/${c.id}`}
+							active={pathname === `/chat/${c.id}` || pathname === `/chat/${c.id}/cheatsheet`}
 							kbdSelected={kbdId === c.id}
 							onOpen={() => {
 								setKbdIndex(null);
 								router.push(`/chat/${c.id}`);
 							}}
+							onOpenCheatSheet={() => { setKbdIndex(null); router.push(`/chat/${c.id}/cheatsheet`); }}
 							onContextMenu={(e) => openContext(e, c)}
 						/>
 					)}

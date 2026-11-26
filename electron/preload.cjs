@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld("lh", {
 	// uploads, copies, or DOM File IPC to main; sandbox/isolation stay on.
 	getPathForFile: (file) => webUtils.getPathForFile(file),
 	chooseAttachmentFolder: () => ipcRenderer.invoke("lh:attachment:pick", "folder"),
+	// Save a cheat sheet's print page as PDF (main prints it, asks where to save).
+	saveCheatSheetPdf: (html, fileName) => ipcRenderer.invoke("lh:cheatsheet:pdf", html, fileName),
 	...(process.argv?.includes("--lh-web-subscriptions") ? {
 		subscriptionTransport: "web",
 		openSubscriptionBrowser: (action) => ipcRenderer.invoke("lh:subscriptions:web-browser", action),

@@ -43,6 +43,9 @@ As required by section 5(a) of the AGPL-3.0, this fork states that it modifies t
 | 2026-11-23 | (CI) | The Defender exclusion is removed again (it did not speed the installs up). The plan-label check (`scripts/smoke-plan-labels.mjs`) now lays out older transcript rows for every font and size, not only for forced sizes, so it no longer fails on slow machines by measuring diagrams the browser has not laid out yet. |
 | 2026-11-25 | ("Your thinking" attachments) | Every "Your thinking" box (built-in questions with options, plugin questions that show thinking, practice problems) takes pasted or dropped images and documents and has a paperclip, like the "Thinking while reading" box; images ride the submission's existing thinking image channel. Free-text "Your answer" is unchanged. |
 | 2026-11-25 | (release) | Version 0.7.3. |
+| 2026-11-26 | (this release) | Cheat sheets: "+" on each teacher answer and "Add to cheat sheet" on selections append to the session's markdown cheat sheet (`data/cheatsheets/`), opened from the top bar or the sidebar, rendered like the chat, editable in markdown, exported as PDF/.docx/.md/.txt; deleted with its session; synced under a new Device Sync "Cheat sheets" toggle. Message content clips with `overflow: clip` (was `hidden`). |
+| 2026-11-27 | (this release) | The free-text "Your answer" box of open questions takes images and files too (paste, drop, paperclip); images ride the answer's own image channel. |
+| 2026-11-26 | (release) | Version 0.7.4. |
 
 The complete history, with every file changed, is in this repository's commit log: <https://github.com/JoaoLuz-pixel/learnharness/commits/main>.
 

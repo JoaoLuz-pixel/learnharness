@@ -26,6 +26,7 @@ On top of LearnHarness 0.7.0, including its sidebar folders and performance work
 - **Images and documents in the chat:** paste or drop images, and attach documents by paste, drop or paperclip in both the main bar and the "Thinking while reading" box. The agent reads Word, PowerPoint, Excel, OpenDocument and `.zip` files.
 - **"Thinking while reading" send:** post a remark or question at any time; the open question is paused and the teacher responds.
 - **Device Sync:** shared learning progress across your devices, through an SSH endpoint you control. One endpoint can hold several syncs: a device joins one or creates its own, and can change sync later.
+- **Cheat sheets:** add any teacher answer (or a selected part) to the session's cheat sheet with one click, edit it in markdown, and export it as PDF, Word, Markdown or plain text.
 - **Community plugins from a file:** install a plugin from its `.zip` (button or drag and drop), see each plugin's version, update plugins from their GitHub releases, and uninstall them. Plugins can react to being uninstalled (`ctx.onUninstall`).
 - **Settings that survive restarts:** "Don't ask again", unsent drafts and keyboard shortcuts.
 - **Native Windows ARM64 build** for Windows on ARM PCs.

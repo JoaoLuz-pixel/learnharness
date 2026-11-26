@@ -1,3 +1,4 @@
+import { deleteCheatSheet } from "./cheatsheets.ts";
 import { abortExtraction, extractionStatuses } from "../agent/subagents/extraction.ts";
 import { isJobLive } from "../agent/subagents/aborts.ts";
 import { coverageOf } from "../core/coverage.ts";
@@ -175,6 +176,7 @@ function finishChatDeletion(chatId: string, mode: ChatDeleteMode): Extract<ChatD
 function finishChatRecordDeletion(chatId: string): number {
 	const jobsRemoved = stores.jobStore.deleteJobsForChat(chatId);
 	if (stores.chatStore.deleteChat(chatId)) {
+		deleteCheatSheet(chatId); // owner, 2026-11-26: a session's cheat sheet goes with it
 		discardChatDeliveries(chatId);
 		clearTurnFailure(chatId);
 		sideChats.stopAll(chatId); // a running side answer has nowhere left to land

@@ -52,14 +52,16 @@ describe('"Your thinking" in built-in questions', () => {
 		assert.equal(group.lastElementChild, submit);
 	});
 
-	it('a free-text question\'s "Your answer" box stays as it was: no paperclip, no image strip, no box drop', () => {
+	it('a free-text question\'s "Your answer" box takes images and files too (fork, 2026-11-27)', () => {
+		const answer = staged([image]);
 		const doc = documentOf(<QuestionDock toolName="explain" toolCallId="q2" input={textQuestion} expanded dictationClaim={false}
-			onExpand={() => {}} onSubmit={() => {}} thinkingImages={staged([image]).value} />);
+			onExpand={() => {}} onSubmit={() => {}} thinkingImages={staged().value} answerImages={answer.value} />);
 		const field = doc.querySelector('[data-testid="answer-field"]')!;
 		assert.ok(field, "free-text mode renders Your answer");
-		assert.equal(field.getAttribute("data-attachment-composer"), null);
-		assert.equal(field.querySelector('[data-testid="staged-images"]'), null);
-		assert.equal(field.querySelector('[data-testid="attach-files"]'), null);
+		assert.equal(field.getAttribute("data-attachment-composer"), "", "drops and the paperclip menu land in this box");
+		assert.ok(field.querySelector('[data-testid="staged-images"]'), "its own staged images show in the box");
+		const submit = [...field.querySelectorAll("button")].find((b) => b.textContent === "Submit answer")!;
+		assert.ok(submit.parentElement!.firstElementChild?.querySelector('[data-testid="attach-files"]'), "paperclip just left of Submit");
 	});
 });
 
@@ -150,7 +152,10 @@ describe("chat.tsx sends the staged thinking images", () => {
 		assert.match(chat, /thinkingImagesQuestion\.current = pendingQuestionId;\s*setQuestionThinkingImages\(\[\], false\);/);
 		assert.match(chat, /thinkingImagesProblem\.current = activeProblemKey;\s*setProblemThinkingImages\(\[\], false\);/);
 		assert.match(chat, /<PluginQuestionDock[^>]*thinkingImages=\{questionThinkingImages\}/);
-		assert.match(chat, /thinkingImages=\{questionThinkingImages\}\s*dictationClaim/, "built-in question dock");
+		assert.match(chat, /thinkingImages=\{questionThinkingImages\}\s*answerImages=\{questionAnswerImages\}\s*dictationClaim/, "built-in question dock");
+		// The "Your answer" box (fork, 2026-11-27): reset with the question, sent on the answer channel.
+		assert.match(chat, /setQuestionThinkingImages\(\[\], false\);\s*setQuestionAnswerImages\(\[\], false\);/);
+		assert.match(chat, /images: raw\.text !== undefined \? questionAnswerImages\.imagesRef\.current\.map/);
 		assert.match(chat, /images=\{problemThinkingImages\}/, "practice dock");
 		assert.match(chat, /thinkingImages: problemThinkingImages,/, "plugin practice dock");
 	});

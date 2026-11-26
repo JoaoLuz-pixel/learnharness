@@ -74,3 +74,4 @@ export { deviceSync } from "./device-sync.ts";
 export { readDeviceDocument, writeDeviceDocument, deleteDeviceDocument, deviceDocumentPath, MAX_DEVICE_DOCUMENT_BYTES } from "./device-local.ts";
 export { assertNotInstalled, installedFolderInfo, uninstallPluginFolder, checkPluginUpdates, downloadPluginUpdate, inspectPluginZip, installPluginPackage, MAX_PLUGIN_ZIP_BYTES, PluginInstallError, replacePluginPackage, summarize as summarizePluginPackage } from "./plugin-install.ts";
 export type { InstalledFolderInfo, PluginPackageSummary, PluginUpdateInfo } from "./plugin-install.ts";
+export { appendCheatSheet, cheatSheetDocx, cheatSheetHtml, CheatSheetError, deleteCheatSheet, readCheatSheet, writeCheatSheet } from "./cheatsheets.ts";

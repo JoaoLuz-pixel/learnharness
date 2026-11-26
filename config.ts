@@ -29,6 +29,8 @@ export const PATHS = {
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(/* turbopackIgnore: true */ DATA_ROOT, "chats"),
 	graph: path.join(/* turbopackIgnore: true */ DATA_ROOT, "graph"),
+	/** Cheat sheets (owner, 2026-11-26): one markdown file per session. */
+	cheatsheets: path.join(/* turbopackIgnore: true */ DATA_ROOT, "cheatsheets"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(/* turbopackIgnore: true */ DATA_ROOT, "debug"),

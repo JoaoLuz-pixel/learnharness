@@ -82,7 +82,7 @@ export class FsBaseSide implements BaseSide {
  *  safety backup and the set-aside snapshot. Returns the file count. */
 export function snapshotDataDir(root: string, dest: string, opts: { move?: boolean } = {}): number {
 	let count = 0;
-	const all: SyncToggles = { layout: true, settings: true, plugins: true, promptsThemes: true };
+	const all: SyncToggles = { layout: true, settings: true, plugins: true, promptsThemes: true, cheatsheets: true };
 	walk(root, (rel, abs) => {
 		if (!inSyncScope(rel, all)) return;
 		const target = path.join(dest, ...rel.split("/"));

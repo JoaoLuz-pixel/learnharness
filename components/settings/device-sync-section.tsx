@@ -21,6 +21,7 @@ const TOGGLE_LABELS = [
 	["settings", "Settings", "General, appearance, models and graph settings"],
 	["plugins", "Plugins & their data", "Which plugins are on, and what they store"],
 	["promptsThemes", "Prompt overrides & themes", "Your custom teacher prompts and themes"],
+	["cheatsheets", "Cheat sheets", "Each session's cheat sheet"],
 ] as const;
 
 const button = "whitespace-nowrap rounded-sm border border-border bg-background px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 disabled:cursor-not-allowed disabled:opacity-50";

@@ -73,7 +73,7 @@ import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext, type SessionImage } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { ArrowRightIcon, DumbbellIcon, MessageCircleQuestionIcon, WaypointsIcon } from "lucide-react";
+import { ArrowRightIcon, DumbbellIcon, MessageCircleQuestionIcon, NotebookPen, PlusIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PluginQuestionDock } from "./plugin-question-dock";
@@ -86,7 +86,7 @@ import type { PluginQuestionDraft } from "./session-core";
 import { SessionFind } from "@/components/session-find";
 import { useProgressiveHistory } from "@/components/progressive-history";
 import { SessionMessageNavigation } from "@/components/session-navigation";
-import { SelectionToolbar } from "@/components/selection-toolbar";
+import { SelectionToolbar, type SelectionAction } from "@/components/selection-toolbar";
 import { createCiteAction, type CitationEditTarget } from "@/components/citation-actions";
 import { CitationActionsContext, type CitationActions } from "@/components/citation-chip";
 import { CitationCommentPopover } from "@/components/citation-comment-popover";
@@ -685,6 +685,8 @@ export function Chat({
 	 * They ride the submission's thinking image channel and reset when the
 	 * question/problem changes; not kept through a reload (like the reading box). */
 	const questionThinkingImages = useStagedImages();
+	// The free-text "Your answer" box's images (fork, 2026-11-27).
+	const questionAnswerImages = useStagedImages();
 	const problemThinkingImages = useStagedImages();
 	const clearReadingThinking = useCallback(() => {
 		readingThinkingRef.current = "";
@@ -733,11 +735,13 @@ export function Chat({
 	}, [pendingQuestionId, questionDraft, pluginQuestionDraft, setReadingImages]);
 	const thinkingImagesQuestion = useRef<string | null>(null);
 	const { setImages: setQuestionThinkingImages } = questionThinkingImages;
+	const { setImages: setQuestionAnswerImages } = questionAnswerImages;
 	useLayoutEffect(() => {
 		if (thinkingImagesQuestion.current === pendingQuestionId) return;
 		thinkingImagesQuestion.current = pendingQuestionId;
 		setQuestionThinkingImages([], false);
-	}, [pendingQuestionId, setQuestionThinkingImages]);
+		setQuestionAnswerImages([], false);
+	}, [pendingQuestionId, setQuestionThinkingImages, setQuestionAnswerImages]);
 	const activeProblemKey = activeProblemOccurrence ? JSON.stringify(activeProblemOccurrence) : null;
 	const thinkingImagesProblem = useRef<string | null>(null);
 	const { setImages: setProblemThinkingImages } = problemThinkingImages;
@@ -827,7 +831,9 @@ export function Chat({
 			return { type: "answer", answer: {
 				...(raw.dontKnow !== undefined ? { dontKnow: raw.dontKnow } : {}), ...(raw.values !== undefined ? { values: raw.values } : {}),
 				...(raw.other !== undefined ? { other: raw.other } : {}), ...(raw.text !== undefined ? { text: raw.text } : {}),
-				...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}), images: [],
+				...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}),
+				// Text answers carry the "Your answer" box's images (answer channel).
+				images: raw.text !== undefined ? questionAnswerImages.imagesRef.current.map(image => ({ ...image })) : [],
 			}, thinking: { text: raw.thinking ?? "", images: questionThinkingImages.imagesRef.current.map(image => ({ ...image })) }, readingThinking: { text: requiresReveal ? readingThinkingRef.current : "", images: requiresReveal ? readingImagesRef.current.map(image => ({ ...image })) : [] } };
 		}, () => {
 			const now = pendingQuestionOf(submissionLive.current.nativeMessages);
@@ -1193,8 +1199,27 @@ export function Chat({
 	}, [toggleQuestionThread]);
 	// Advancing the lesson does not close or disable an old conversation.
 	const sideActions = useMemo(() => createSideQuestionActions({ open: openSideThread }), [openSideThread]);
-	const selectionActions = useMemo(() => [citeAction, ...sideActions], [citeAction, sideActions]);
 	const router = useRouter();
+	// CHEAT SHEET (owner, 2026-11-26): "+" on an answer or "Add to cheat
+	// sheet" on a selection appends it to this session's sheet.
+	const [cheatNotice, setCheatNotice] = useState<{ text: string; error?: boolean } | null>(null);
+	const cheatNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const addToCheatSheet = useCallback(async (markdown: string) => {
+		if (cheatNoticeTimer.current) clearTimeout(cheatNoticeTimer.current);
+		try {
+			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}/cheatsheet`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ append: markdown }) });
+			if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Could not add it (${res.status})`);
+			setCheatNotice({ text: "Added to cheat sheet" });
+		} catch (err) { setCheatNotice({ text: (err as Error).message, error: true }); }
+		cheatNoticeTimer.current = setTimeout(() => setCheatNotice(null), 4000);
+	}, [chatId]);
+	useEffect(() => () => { if (cheatNoticeTimer.current) clearTimeout(cheatNoticeTimer.current); }, []);
+	const cheatAction = useMemo<SelectionAction>(() => ({
+		id: "cheat-sheet", label: "Add to cheat sheet", ariaLabel: "Add the selection to the cheat sheet", icon: NotebookPen,
+		visible: (capture) => !!capture.selector.text.trim(),
+		onSelect: (capture) => { void addToCheatSheet(capture.selector.text); return true; },
+	}), [addToCheatSheet]);
+	const selectionActions = useMemo(() => [citeAction, ...sideActions, cheatAction], [citeAction, sideActions, cheatAction]);
 	const transcriptElementRef = useRef<HTMLElement | null>(null);
 	transcriptElementRef.current = transcriptElement;
 	const citationActions = useMemo<CitationActions>(() => ({
@@ -1850,6 +1875,13 @@ export function Chat({
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
+					<Hint label="Open this session's cheat sheet" side="bottom">
+						<button type="button" data-testid="open-cheatsheet" aria-label="Cheat sheet"
+							onClick={(e) => { blurAfterPointerClick(e); router.push(`/chat/${encodeURIComponent(chatId)}/cheatsheet`); }}
+							className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground">
+							<NotebookPen aria-hidden="true" className="size-3" />Cheat sheet
+						</button>
+					</Hint>
 					{planTree && (
 						<Hint label="Open the full plan" side="bottom">
 <button
@@ -2063,7 +2095,15 @@ export function Chat({
 														const sourceId = textPartMessageId(part.id);
 														const anchor = sourceId && sourceTextParts.get(sourceId) === part.id ? messageAnchorId(sourceId) : undefined;
 														return (
-															<div key={part.id || pi} id={anchor} data-source-message-id={sourceId ?? undefined} className="lh-source-passage">
+															<div key={part.id || pi} id={anchor} data-source-message-id={sourceId ?? undefined} className="lh-source-passage group/answer relative">
+																{m.role === "assistant" && part.state !== "streaming" && (part.text ?? "").trim() && (
+																	<button type="button" data-testid="add-to-cheatsheet" aria-label="Add this answer to the cheat sheet" title="Add to cheat sheet"
+																		data-session-find-exclude=""
+																		onClick={() => void addToCheatSheet(part.text ?? "")}
+																		className="sticky top-2 z-10 float-right -mb-7 ml-2 flex size-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground opacity-0 shadow-sm transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/answer:opacity-100">
+																		<PlusIcon aria-hidden="true" className="size-4" />
+																	</button>
+																)}
 																<MessageResponse>{part.text}</MessageResponse>
 															</div>
 														);
@@ -2233,6 +2273,7 @@ export function Chat({
 					onSendReadingThinking={pending || pendingPlugin ? requestPauseSend : undefined}
 					readingImages={readingImages}
 					questionThinkingImages={questionThinkingImages}
+					questionAnswerImages={questionAnswerImages}
 					problemThinkingImages={problemThinkingImages}
 					readingSendDisabled={busy || compacting || submissionRunner.occupied}
 					phase={phases.at(-1) ?? "probe"}
@@ -2363,6 +2404,10 @@ export function Chat({
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				<SelectionToolbar viewport={transcriptElement} actions={selectionActions} />
+				{cheatNotice && <div role="status" data-testid="cheat-sheet-notice" className={`pointer-events-auto fixed bottom-24 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border bg-card px-4 py-1.5 font-ui text-xs shadow-md ${cheatNotice.error ? "text-destructive" : "text-foreground"}`}>
+					{cheatNotice.text}
+					{!cheatNotice.error && <button type="button" className="text-primary underline-offset-2 hover:underline" onClick={() => router.push(`/chat/${encodeURIComponent(chatId)}/cheatsheet`)}>Open</button>}
+				</div>}
 				{citationEdit && (
 					<CitationCommentPopover
 						key={`${citationEdit.start}:${citationEdit.link}`}
@@ -2555,6 +2600,7 @@ export function DockOverlay({
 	readingSendDisabled = false,
 	readingImages,
 	questionThinkingImages,
+	questionAnswerImages,
 	problemThinkingImages,
 	phase,
 	turns,
@@ -2623,6 +2669,7 @@ export function DockOverlay({
 	readingImages?: StagedImages;
 	/** "Your thinking" images (fork, 2026-11-25): the open question's and the open problem's. */
 	questionThinkingImages?: StagedImages;
+	questionAnswerImages?: StagedImages;
 	problemThinkingImages?: StagedImages;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
@@ -3141,6 +3188,7 @@ export function DockOverlay({
 									workingRef={workingRef}
 									onEscape={dictationCancel}
 									thinkingImages={questionThinkingImages}
+									answerImages={questionAnswerImages}
 									dictationClaim={!revealPending}
 									compactionRunning={compactionRunning}
 									layoutRequest={layoutRequest}

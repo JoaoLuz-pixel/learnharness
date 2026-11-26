@@ -4,9 +4,9 @@
  * Anything unlisted (debug artifacts, temps, unknown files) never syncs, and
  * secrets live outside the data dir entirely (auth.json, credentials).
  */
-export type SyncCategory = "progress" | "layout" | "settings" | "plugins" | "promptsThemes";
+export type SyncCategory = "progress" | "layout" | "settings" | "plugins" | "promptsThemes" | "cheatsheets";
 export type OptionalSyncCategory = Exclude<SyncCategory, "progress">;
-export const OPTIONAL_SYNC_CATEGORIES: readonly OptionalSyncCategory[] = ["layout", "settings", "plugins", "promptsThemes"];
+export const OPTIONAL_SYNC_CATEGORIES: readonly OptionalSyncCategory[] = ["layout", "settings", "plugins", "promptsThemes", "cheatsheets"];
 
 /** How a unit merges: whole files (3-way, conflicts asked), append ledgers
  *  (line union, conflict-free except delete-vs-add), or layout positions
@@ -30,6 +30,8 @@ export function classifySyncPath(rel: string): SyncScopeEntry | null {
 	if (rel === "graph/sources.json" || rel === "graph/format.json") return { category: "progress", kind: "file" };
 	if (segments.length === 2 && (segments[0] === "chats" || segments[0] === "jobs") && segments[1]!.endsWith(".json")) return { category: "progress", kind: "file" };
 	if (rel === "graph/positions.json") return { category: "layout", kind: "positions" };
+	// Cheat sheets (owner, 2026-11-26): their own toggle, merged like sessions.
+	if (segments.length === 2 && segments[0] === "cheatsheets" && segments[1]!.endsWith(".md")) return { category: "cheatsheets", kind: "file" };
 	if (rel === "settings.json" || rel === "graph/render-settings.json") return { category: "settings", kind: "file" };
 	if (rel === "plugins-state.json" || segments[0] === "plugins" || segments[0] === "core-plugin-data") return segments.length > 1 || rel === "plugins-state.json" ? { category: "plugins", kind: "file" } : null;
 	if ((segments[0] === "prompts" || segments[0] === "themes") && segments.length > 1) return { category: "promptsThemes", kind: "file" };
@@ -37,7 +39,7 @@ export function classifySyncPath(rel: string): SyncScopeEntry | null {
 }
 
 export type SyncToggles = Record<OptionalSyncCategory, boolean>;
-export const DEFAULT_SYNC_TOGGLES: SyncToggles = { layout: true, settings: true, plugins: true, promptsThemes: true };
+export const DEFAULT_SYNC_TOGGLES: SyncToggles = { layout: true, settings: true, plugins: true, promptsThemes: true, cheatsheets: true };
 
 /** Is this path synced on this device, given its toggles? */
 export function inSyncScope(rel: string, toggles: SyncToggles): SyncScopeEntry | null {

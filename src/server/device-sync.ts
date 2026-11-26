@@ -453,6 +453,11 @@ class DeviceSyncService {
 			const l = chatInfo(localBytes), r = chatInfo(remoteBytes);
 			return { ...conflict, kind: "session", label: `Session “${l.title ?? r.title ?? conflict.rel}”`, ...(l.last ? { localPreview: l.last } : {}), ...(r.last ? { remotePreview: r.last } : {}) };
 		}
+		if (conflict.rel.startsWith("cheatsheets/")) {
+			const id = conflict.rel.slice("cheatsheets/".length, -".md".length);
+			const chat = chatInfo((await this.local.read(`chats/${id}.json`)) ?? (manifest.files[`chats/${id}.json`] ? await endpoint.read(`chats/${id}.json`) : null));
+			return { ...conflict, kind: "other", label: `Cheat sheet for “${chat.title ?? "a session"}”` };
+		}
 		const names: Record<string, string> = { "settings.json": "Settings", "graph/sources.json": "Imported notes list", "graph/render-settings.json": "Graph display settings", "plugins-state.json": "Enabled plugins" };
 		return { ...conflict, kind: "other", label: names[conflict.rel] ?? conflict.rel };
 	}

@@ -1,6 +1,6 @@
 /** DEVICE SYNC — the client-visible contract (owner, 2026-11-15). Types and
  *  constants only: safe to import from browser code. */
-export type SyncCategoryToggle = "layout" | "settings" | "plugins" | "promptsThemes";
+export type SyncCategoryToggle = "layout" | "settings" | "plugins" | "promptsThemes" | "cheatsheets";
 export type SyncToggleState = Record<SyncCategoryToggle, boolean>;
 export const SYNC_INTERVALS = [5, 10, 30, 60] as const;
 export type SyncInterval = (typeof SYNC_INTERVALS)[number];

@@ -778,6 +778,28 @@ async function main() {
 		await openWebSubscriptionBrowser(action, new URL(url).origin, { openExternal: (target) => shell.openExternal(target) });
 	});
 
+	// Cheat sheet → PDF (owner, 2026-11-26): the server's light print page is
+	// printed in a hidden, sandboxed, script-free window; the learner picks
+	// where to save it.
+	ipcMain.handle("lh:cheatsheet:pdf", async (event, html, fileName) => {
+		const win = BrowserWindow.fromWebContents(event.sender);
+		if (!trustedAppWindows.has(win) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted desktop request.");
+		if (typeof html !== "string" || html.length > 8 * 1024 * 1024) throw new Error("Invalid cheat sheet");
+		const name = (typeof fileName === "string" ? fileName : "cheat sheet.pdf").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").slice(0, 120);
+		const printer = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+		try {
+			printer.webContents.on("will-navigate", (e) => e.preventDefault());
+			await printer.loadURL(`data:text/html;charset=utf-8;base64,${Buffer.from(html, "utf8").toString("base64")}`);
+			const pdf = await printer.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+			const { canceled, filePath } = await dialog.showSaveDialog(win, {
+				defaultPath: path.join(app.getPath("downloads"), name.endsWith(".pdf") ? name : `${name}.pdf`),
+				filters: [{ name: "PDF", extensions: ["pdf"] }],
+			});
+			if (canceled || !filePath) return { saved: false };
+			await fs.promises.writeFile(filePath, pdf);
+			return { saved: true, path: filePath };
+		} finally { printer.destroy(); }
+	});
 	ipcMain.handle("lh:attachment:pick", (event, mode) => pickAttachmentPath(event, mode, {
 		BrowserWindow, dialog, trustedAppWindows, origin: new URL(url).origin,
 	}));

@@ -45,7 +45,7 @@ describe("endpoint commands", () => {
 
 const status = (patch: Partial<DeviceSyncStatus>): DeviceSyncStatus => ({
 	phase: "in-sync", deviceId: "dev_a", deviceName: "Laptop", publicKey: key, endpoint: { host: "nas", port: 22, fingerprint: "SHA256:x" }, sync: { id: "main", name: "Shared progress" }, enabled: true,
-	toggles: { layout: true, settings: true, plugins: true, promptsThemes: true }, intervalSec: 10, lastSyncAt: null, lastError: null,
+	toggles: { layout: true, settings: true, plugins: true, promptsThemes: true, cheatsheets: true }, intervalSec: 10, lastSyncAt: null, lastError: null,
 	conflicts: [], devices: [], locks: [], setAside: [], ...patch,
 });
 

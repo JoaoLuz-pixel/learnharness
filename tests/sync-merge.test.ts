@@ -90,6 +90,12 @@ describe("sync scope", () => {
 		assert.equal(classifySyncPath("themes/dark.json")?.category, "promptsThemes");
 		for (const bad of ["../auth.json", "auth.json", "chats/.chat.json", "chats/chat_a.json.tmp-123", "debug/x.jsonl", "chats/sub/x.json"]) assert.equal(classifySyncPath(bad), null, bad);
 		assert.equal(inSyncScope("settings.json", { ...DEFAULT_SYNC_TOGGLES, settings: false }), null);
-		assert.ok(inSyncScope("chats/chat_a.json", { layout: false, settings: false, plugins: false, promptsThemes: false }));
+		assert.ok(inSyncScope("chats/chat_a.json", { layout: false, settings: false, plugins: false, promptsThemes: false, cheatsheets: false }));
+		// Cheat sheets (owner, 2026-11-26): their own toggle, merged as whole files.
+		assert.deepEqual(classifySyncPath("cheatsheets/chat_a.md"), { category: "cheatsheets", kind: "file" });
+		assert.equal(classifySyncPath("cheatsheets/sub/x.md"), null);
+		assert.equal(classifySyncPath("cheatsheets/x.txt"), null);
+		assert.equal(inSyncScope("cheatsheets/chat_a.md", { ...DEFAULT_SYNC_TOGGLES, cheatsheets: false }), null);
+		assert.ok(inSyncScope("cheatsheets/chat_a.md", DEFAULT_SYNC_TOGGLES));
 	});
 });

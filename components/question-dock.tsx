@@ -223,6 +223,9 @@ export interface QuestionDockProps {
 	 *  paperclip; they ride the answer's thinking image channel. Select
 	 *  modes only — free-text "Your answer" keeps text + file chips. */
 	thinkingImages?: StagedImages;
+	/** Images staged in the free-text "Your answer" box (fork, 2026-11-27):
+	 *  paste, drop or the paperclip; they ride the answer's own image channel. */
+	answerImages?: StagedImages;
 	/** Adaptive layout (Appearance → Adapt question layout); null/absent = off. */
 	layoutRequest?: QuestionLayoutRequest | null;
 	/** Reports the solved layout (null when off or unmounted). */
@@ -248,6 +251,7 @@ export function QuestionDock({
 	dictationClaim = true,
 	compactionRunning = false,
 	thinkingImages,
+	answerImages,
 	workingRef,
 	layoutRequest,
 	onLayout,
@@ -306,6 +310,7 @@ export function QuestionDock({
 					onSaveDraft={onSaveDraft}
 					onEscape={onEscape}
 					thinkingImages={thinkingImages}
+					answerImages={answerImages}
 					workingRef={workingRef}
 					dictationClaim={dictationClaim}
 					compactionRunning={compactionRunning}
@@ -404,6 +409,7 @@ function QuestionDockForm({
 	dictationClaim = true,
 	compactionRunning = false,
 	thinkingImages,
+	answerImages,
 	workingRef,
 	layoutRequest,
 	onLayout,
@@ -618,6 +624,7 @@ function QuestionDockForm({
 	const [kbdIdx, setKbdIdx] = useState<number | null>(null);
 	const otherInputRef = useRef<HTMLDivElement>(null);
 	const thinkingRef = useRef<HTMLDivElement>(null);
+	const answerRef = useRef<HTMLDivElement>(null);
 	// One row past the options is the trailing row: quiz → don't-know,
 	// ask → Other (a question never has both). Text mode (ask/explain)
 	// has no rows — the composer IS the answer surface.
@@ -1133,14 +1140,17 @@ function QuestionDockForm({
 				<div
 					data-testid={qd.mode === "text" ? "answer-field" : "thinking-field"}
 					className="rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
-					{...(qd.mode === "text" ? {} : attachmentBoxProps(thinkingRef, thinkingImages))}
+					{...(qd.mode === "text" ? attachmentBoxProps(answerRef, answerImages) : attachmentBoxProps(thinkingRef, thinkingImages))}
 				>
 					<div className="px-2.5 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 						{qd.mode === "text" ? "Your answer" : "YOUR THINKING"}
 					</div>
+					{qd.mode === "text" && answerImages && <div className="px-1.5"><StagedImageStrip images={answerImages.images} onRemove={answerImages.remove} notice={answerImages.notice} onDismissNotice={answerImages.dismissNotice} /></div>}
 					{qd.mode !== "text" && thinkingImages && <div className="px-1.5"><StagedImageStrip images={thinkingImages.images} onRemove={thinkingImages.remove} notice={thinkingImages.notice} onDismissNotice={thinkingImages.dismissNotice} /></div>}
 					{qd.mode === "text" ? (
 						<PathInput
+							ref={answerRef}
+							{...pasteAttachmentProps(answerImages)}
 							value={text}
 							onValueChange={(value) => {
 								answerTextRef.current = value;
@@ -1212,7 +1222,8 @@ function QuestionDockForm({
 						</span>
 						{/* Paperclip just left of Submit in "Your thinking" (fork, 2026-11-25). */}
 						<div className="ml-auto flex items-center gap-1">
-							{qd.mode !== "text" && <AttachFilesButton editorRef={thinkingRef} compact />}
+							{/* …and in the free-text "Your answer" box (fork, 2026-11-27). */}
+							<AttachFilesButton editorRef={qd.mode === "text" ? answerRef : thinkingRef} compact />
 							<Button
 								type="submit"
 								disabled={!canSubmit || compactionRunning || preparing}
