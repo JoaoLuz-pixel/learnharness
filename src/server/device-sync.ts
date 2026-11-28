@@ -2,12 +2,20 @@
  * DEVICE SYNC — the server-side service (owner design, 2026-11-15).
  *
  * The app always works on its LOCAL files; this service keeps them merged
- * with one SSH endpoint while the learner has sync enabled: on every local
+ * with one endpoint while the learner has sync enabled: on every local
  * change (debounced) and every `intervalSec`. Losing the connection never
  * interrupts learning — the service goes "offline" and retries with backoff.
  *
+ * Endpoints (owner, 2026-11-28): an SSH endpoint (the original kind), a
+ * cloud folder (OneDrive, iCloud Drive…), another device's built-in host,
+ * or this device's own host. Open syncs on SSH endpoints keep the original
+ * layout (engine.ts) so older app versions keep syncing them; every other
+ * sync uses the shared-folder layout (peer.ts).
+ *
  * Private state lives in SYNC_DIR (never synced): state.json, the device key,
- * base/ (last-synced bytes per file), backups/ and set-aside/ snapshots.
+ * base/ (last-synced bytes per file), peer/<sync>/ (shared-folder state),
+ * secrets.json (remembered sync keys), host/ (the built-in host),
+ * backups/ and set-aside/ snapshots.
  */
 import * as fs from "node:fs";
 import os from "node:os";
@@ -15,60 +23,80 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS, SYNC_DIR } from "../../config.ts";
 import { emit, subscribe } from "../core/events.ts";
-import type { ConflictDecision, DeviceSyncStatus, JoinChoice, SetAsideView, SyncChoiceView, SyncConflictView, SyncInterval, SyncLockView, SyncPhase, SyncProbeResult, SyncTarget, SyncToggleState } from "../core/device-sync.ts";
+import type { ConflictDecision, DeviceSyncStatus, JoinChoice, SetAsideView, SyncChoiceView, SyncConflictView, SyncEndpointView, SyncEndpointTarget, SyncHostView, SyncInterval, SyncLockView, SyncPhase, SyncProbeResult, SyncTarget, SyncToggleState } from "../core/device-sync.ts";
 import { SYNC_INTERVALS } from "../core/device-sync.ts";
+import { checkPasswordShape, deriveSyncKeys, keysFromMaster, unlockSync, type SyncKeys } from "../sync/crypto.ts";
 import { resolveConflict, runSyncCycle, type Manifest, type SyncConflict } from "../sync/engine.ts";
+import { cloudFolderStore, suggestCloudFolders, type CloudFolderSuggestion } from "../sync/folder-store.ts";
+import { HostConnection, NotAHostError } from "../sync/host-client.ts";
+import { DEFAULT_HOST_PORT, hostAddresses, SyncHost } from "../sync/host-server.ts";
 import { FsBaseSide, FsLocalSide, listSnapshot, snapshotDataDir } from "../sync/local-fs.ts";
-import { ledgerLineId, mergeLedger } from "../sync/merge.ts";
-import { DEFAULT_SYNC_TOGGLES, classifySyncPath } from "../sync/scope.ts";
+import { hashBytes, ledgerLineId, mergeLedger } from "../sync/merge.ts";
+import { collectPeerGarbage, createPeerSync, emptyPeerState, isPeerSyncId, keysFit, listPeerSyncs, newPeerSyncId, PEER_GC_INTERVAL_MS, peerVersion, PeerSyncFolder, readPeerMeta, resolvePeerConflict, runPeerCycle, type ContentCache, type FolderStore, type PeerConflict, type PeerState } from "../sync/peer.ts";
+import { DEFAULT_SYNC_TOGGLES, classifySyncPath, inSyncScope } from "../sync/scope.ts";
 import { cleanSyncName, generateDeviceKey, HostKeyMismatchError, isSyncId, MAIN_SYNC_DEFAULT_NAME, MAIN_SYNC_ID, newSyncId, SftpEndpoint, type DeviceRecord, type SessionLock, type SyncSummary } from "../sync/sftp.ts";
 import { writeFileAtomicSync } from "../store/atomic-write.ts";
+import { announceHosting, forgetSyncKey, recallSyncKey, rememberSyncKey } from "./sync-secrets.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 
-interface StoredConflict extends SyncConflict { label: string; kind: SyncConflictView["kind"]; localPreview?: string; remotePreview?: string }
+interface StoredConflict extends SyncConflict { label: string; kind: SyncConflictView["kind"]; localPreview?: string; remotePreview?: string; peer?: string }
 interface SyncState {
 	version: 1;
 	deviceId: string;
 	deviceName: string;
 	toggles: SyncToggleState;
 	intervalSec: SyncInterval;
-	endpoint: { host: string; port: number; fingerprint: string } | null;
+	endpoint: SyncEndpointView | null;
 	/** The sync this device belongs to on the endpoint (several may exist,
 	 *  owner 2026-11-20). Devices set up before then are in "main". */
 	syncId: string | null;
 	/** Its last-known name, for display while offline. */
 	syncName: string | null;
+	/** It is password-protected (owner, 2026-11-28). */
+	syncLocked: boolean;
 	enabled: boolean;
 	/** This device completed its first sync with the current endpoint. */
 	joined: boolean;
 	conflicts: StoredConflict[];
 	setAside: SetAsideView[];
 	lastSyncAt: string | null;
+	/** "Host sync on this device" (owner, 2026-11-28). */
+	host: { enabled: boolean; port: number };
 }
 
 /** The sync this device is in no longer exists on the endpoint. */
 class SyncRemovedError extends Error {
 	constructor() { super("This sync was removed from the endpoint. Use Change sync to pick another one; nothing on this device was changed."); }
 }
+/** This device's remembered key does not open its sync any more. */
+class SyncKeyMissingError extends Error {
+	constructor() { super("This device no longer has the password for its sync. Use Change sync and join it again with the password; nothing on this device was changed."); }
+}
 
 const STATE_FILE = () => path.join(SYNC_DIR, "state.json");
 const KEY_FILE = () => path.join(SYNC_DIR, "device_ed25519");
 const BASE_DIR = () => path.join(SYNC_DIR, "base");
+const PEER_DIR = (syncId: string) => path.join(SYNC_DIR, "peer", syncId);
+const HOST_DIR = () => path.join(SYNC_DIR, "host");
 const LOCK_TTL_MS = 90_000;
 const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
 function defaultState(): SyncState {
 	return { version: 1, deviceId: `dev_${randomUUID().slice(0, 12)}`, deviceName: os.hostname() || "This device", toggles: { ...DEFAULT_SYNC_TOGGLES },
-		intervalSec: 10, endpoint: null, syncId: null, syncName: null, enabled: false, joined: false, conflicts: [], setAside: [], lastSyncAt: null };
+		intervalSec: 10, endpoint: null, syncId: null, syncName: null, syncLocked: false, enabled: false, joined: false, conflicts: [], setAside: [], lastSyncAt: null,
+		host: { enabled: false, port: DEFAULT_HOST_PORT } };
 }
 function loadState(): SyncState {
 	try {
-		const value = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8")) as Partial<SyncState>;
+		const value = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8")) as Partial<SyncState> & { endpoint?: Partial<SyncEndpointView> & { host?: string } | null };
 		if (value.version !== 1 || typeof value.deviceId !== "string") return defaultState();
 		const base = defaultState();
 		// Before several syncs existed, a configured endpoint meant its one sync: "main".
-		if (value.syncId === undefined || !isSyncId(value.syncId)) value.syncId = value.endpoint ? MAIN_SYNC_ID : null;
-		return { ...base, ...value, toggles: { ...base.toggles, ...value.toggles }, intervalSec: SYNC_INTERVALS.includes(value.intervalSec as SyncInterval) ? value.intervalSec as SyncInterval : 10 } as SyncState;
+		if (value.syncId === undefined || !(isSyncId(value.syncId) || isPeerSyncId(value.syncId))) value.syncId = value.endpoint ? MAIN_SYNC_ID : null;
+		// Before other endpoint kinds existed, every endpoint was SSH.
+		if (value.endpoint && !("kind" in value.endpoint && value.endpoint.kind)) value.endpoint = { kind: "ssh", ...(value.endpoint as { host: string; port: number; fingerprint: string }) };
+		const host = { ...base.host, ...value.host };
+		return { ...base, ...value, host, toggles: { ...base.toggles, ...value.toggles }, intervalSec: SYNC_INTERVALS.includes(value.intervalSec as SyncInterval) ? value.intervalSec as SyncInterval : 10 } as SyncState;
 	} catch { return defaultState(); }
 }
 
@@ -90,9 +118,41 @@ function nodeInfo(bytes: Buffer | null, id: string): { name?: string; statement?
 	return {};
 }
 
+/** Shared-folder merge bases on disk (graph ledgers and positions only). */
+class FsContentCache implements ContentCache {
+	constructor(private dir: string) {}
+	get(hash: string): Buffer | null {
+		if (!/^[0-9a-f]{64}$/.test(hash)) return null;
+		try { const bytes = fs.readFileSync(path.join(this.dir, hash)); return hashBytes(bytes) === hash ? bytes : null; } catch { return null; }
+	}
+	put(bytes: Buffer): void {
+		const file = path.join(this.dir, hashBytes(bytes));
+		if (fs.existsSync(file)) return;
+		fs.mkdirSync(this.dir, { recursive: true });
+		writeFileAtomicSync(file, bytes);
+	}
+	/** Keep only the contents still needed as a base or a current version. */
+	prune(keep: Set<string>): void {
+		let names: string[];
+		try { names = fs.readdirSync(this.dir); } catch { return; }
+		for (const name of names) if (/^[0-9a-f]{64}$/.test(name) && !keep.has(name)) { try { fs.unlinkSync(path.join(this.dir, name)); } catch { /* next time */ } }
+	}
+}
+
+const sameEndpoint = (a: SyncEndpointView | null, b: SyncEndpointView): boolean => {
+	if (!a || a.kind !== b.kind) return false;
+	if (a.kind === "folder" && b.kind === "folder") return path.resolve(a.path) === path.resolve(b.path);
+	if ((a.kind === "ssh" || a.kind === "host") && (b.kind === "ssh" || b.kind === "host")) return a.host === b.host && a.port === b.port && a.fingerprint === b.fingerprint;
+	return a.kind === "self";
+};
+
+/** An open shared-folder sync and what to close when done with it. */
+interface PeerHandle { folder: PeerSyncFolder; close: () => void }
+
 class DeviceSyncService {
 	private state = loadState();
 	private endpoint: SftpEndpoint | null = null;
+	private peer: PeerHandle | null = null;
 	private phase: SyncPhase = "off";
 	private lastError: string | null = null;
 	private devices: DeviceRecord[] = [];
@@ -107,14 +167,18 @@ class DeviceSyncService {
 	private local = new FsLocalSide(PATHS.data, () => this.state.toggles);
 	private base = new FsBaseSide(BASE_DIR());
 	private pendingJoin: JoinChoice | null = null;
-	/** A sync to create on the first cycle after Connect / Change sync. */
+	/** A sync to create on the first cycle after Connect / Change sync (SSH layout). */
 	private pendingCreate: { name: string } | null = null;
+	private host: SyncHost | null = null;
+	private hostError: string | null = null;
+	private hostSyncs: SyncHostView["syncs"] = [];
 
 	constructor() {
 		subscribe((event) => {
 			if (event.type === "turn-started") void this.lockSession(event.chatId);
 			if (event.type === "turn-settled") { void this.unlockSession(event.chatId); this.schedule(500); }
 		});
+		if (this.state.host.enabled) void this.startHost();
 		if (this.state.enabled && this.state.endpoint && this.state.joined) this.start();
 	}
 
@@ -126,6 +190,7 @@ class DeviceSyncService {
 	private setPhase(phase: SyncPhase, error: string | null = this.lastError): void {
 		this.phase = phase; this.lastError = error; this.changed();
 	}
+	private isPeer(): boolean { return isPeerSyncId(this.state.syncId); }
 
 	/* ── keys ── */
 	publicKey(): string | null { try { return fs.readFileSync(`${KEY_FILE()}.pub`, "utf8").trim(); } catch { return null; } }
@@ -142,6 +207,8 @@ class DeviceSyncService {
 	private privateKey(): string {
 		try { return fs.readFileSync(KEY_FILE(), "utf8"); } catch { throw new Error("Generate this device's key first."); }
 	}
+	/** Hosts need a device key too, but nothing to set up: make one quietly. */
+	private ensureKey(): string { this.generateKey(); return this.privateKey(); }
 
 	/* ── status ── */
 	status(): DeviceSyncStatus {
@@ -149,7 +216,8 @@ class DeviceSyncService {
 		return {
 			phase: this.phase, deviceId: this.state.deviceId, deviceName: this.state.deviceName, publicKey: this.publicKey(),
 			endpoint: this.state.endpoint,
-			sync: this.state.syncId ? { id: this.state.syncId, name: this.state.syncName ?? (this.state.syncId === MAIN_SYNC_ID ? MAIN_SYNC_DEFAULT_NAME : this.state.syncId) } : null,
+			sync: this.state.syncId ? { id: this.state.syncId, name: this.state.syncName ?? (this.state.syncId === MAIN_SYNC_ID ? MAIN_SYNC_DEFAULT_NAME : this.state.syncId), locked: this.state.syncLocked } : null,
+			host: this.hostView(),
 			enabled: this.state.enabled, toggles: this.state.toggles, intervalSec: this.state.intervalSec,
 			lastSyncAt: this.state.lastSyncAt, lastError: this.lastError,
 			conflicts: this.state.conflicts.map(c => ({ id: c.id, label: c.label, kind: c.kind, ...(c.deletedOn ? { deletedOn: c.deletedOn } : {}),
@@ -161,10 +229,16 @@ class DeviceSyncService {
 			setAside: this.state.setAside,
 		};
 	}
+	private hostView(): SyncHostView {
+		return { enabled: this.state.host.enabled, running: !!this.host?.running, port: this.state.host.port,
+			fingerprint: this.state.host.enabled && this.host ? this.host.fingerprint : "", addresses: this.state.host.enabled ? hostAddresses() : [],
+			syncs: this.state.host.enabled ? this.hostSyncs : [], error: this.hostError };
+	}
 	/** Another device is running a turn in this session (server-side gate). */
 	remoteLockFor(chatId: string): SyncLockView | null {
 		return this.status().locks.find(l => l.chatId === chatId) ?? null;
 	}
+	cloudFolders(): CloudFolderSuggestion[] { return suggestCloudFolders(); }
 
 	/* ── preferences ── */
 	configure(patch: { deviceName?: string; toggles?: Partial<SyncToggleState>; intervalSec?: number }): void {
@@ -183,52 +257,182 @@ class DeviceSyncService {
 		this.save(); this.changed(); this.schedule(500);
 	}
 
+	/* ── the built-in host ── */
+	private hostInstance(): SyncHost {
+		return (this.host ??= new SyncHost(HOST_DIR(), () => { void this.refreshHostSyncs(); }));
+	}
+	private async refreshHostSyncs(): Promise<void> {
+		try { this.hostSyncs = this.host ? (await this.host.listSyncs()).map(s => ({ id: s.id, name: s.name, members: s.members })) : []; } catch { /* next change */ }
+		this.changed();
+	}
+	private async startHost(): Promise<void> {
+		try { await this.hostInstance().start(this.state.host.port); this.hostError = null; }
+		catch (err) { this.hostError = err instanceof Error ? err.message : String(err); }
+		announceHosting(!!this.host?.running);
+		await this.refreshHostSyncs();
+	}
+	async setHosting(patch: { enabled?: boolean; port?: number }): Promise<void> {
+		if (patch.port !== undefined) {
+			if (!Number.isInteger(patch.port) || patch.port < 1024 || patch.port > 65535) throw new Error("The port must be a number from 1024 to 65535");
+			if (patch.port !== this.state.host.port) { this.state.host.port = patch.port; if (this.host?.running) await this.host.stop(); }
+		}
+		if (patch.enabled !== undefined) this.state.host.enabled = patch.enabled;
+		this.save();
+		if (this.state.host.enabled) await this.startHost();
+		else { await this.host?.stop(); this.hostError = null; announceHosting(false); }
+		this.changed();
+		if (this.state.host.enabled && this.hostError) throw new Error(this.hostError);
+	}
+	/** New syncs on the built-in host are created here, on the host PC, and
+	 *  always have a password (owner, 2026-11-28). */
+	async createHostSync(name: string, password: string): Promise<string> {
+		if (!this.state.host.enabled) throw new Error("Turn on hosting first");
+		const id = await this.hostInstance().createSync(cleanSyncName(name), checkPasswordShape(password), this.state.deviceName);
+		await this.refreshHostSyncs();
+		return id;
+	}
+
 	/* ── connecting ── */
+	/** The store behind a shared-folder endpoint, opened for one use. */
+	private async openStore(endpoint: SyncEndpointView, syncId: string | null, options: { join?: { syncId: string; auth: Buffer } } = {}): Promise<{ store: FolderStore; close: () => void; onClose?: (fn: () => void) => void }> {
+		if (endpoint.kind === "folder") return { store: cloudFolderStore(endpoint.path), close: () => {} };
+		if (endpoint.kind === "self") {
+			if (!this.state.host.enabled) throw new Error("Turn on “Host sync on this device” first.");
+			return { store: this.hostInstance().store, close: () => {} };
+		}
+		if (endpoint.kind === "ssh") {
+			const sftp = await SftpEndpoint.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.privateKey(), pinned: endpoint.fingerprint });
+			return { store: sftp.folderStore(), close: () => sftp.close(), onClose: fn => sftp.onClose(fn) };
+		}
+		const host = await HostConnection.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.ensureKey(), pinned: endpoint.fingerprint });
+		try { if (options.join) await host.join(options.join.syncId, this.state.deviceId, options.join.auth); }
+		catch (err) { host.close(); throw err; }
+		if (!syncId) { host.close(); throw new Error("No sync chosen"); }
+		return { store: host.store(syncId), close: () => host.close(), onClose: fn => host.onClose(fn) };
+	}
+
 	/** First contact: learn the endpoint's identity and its syncs without
 	 *  trusting it yet (nothing is written). */
-	async probe(host: string, port: number): Promise<SyncProbeResult> {
-		const endpoint = await SftpEndpoint.connect({ host, port, privateKey: this.privateKey() });
+	async probe(target: SyncEndpointTarget): Promise<SyncProbeResult> {
+		if (target.kind === "folder") {
+			const store = cloudFolderStore(target.path);
+			return { kind: "folder", canCreate: true, passwordRequired: false, syncs: await this.peerChoices(store) };
+		}
+		if (target.kind === "self") {
+			if (!this.state.host.enabled) throw new Error("Turn on “Host sync on this device” first.");
+			return { kind: "self", canCreate: true, passwordRequired: true, syncs: await this.peerChoices(this.hostInstance().store) };
+		}
 		try {
-			return { fingerprint: endpoint.fingerprint, syncs: choiceViews(await endpoint.listSyncs()) };
+			const host = await HostConnection.connect({ host: target.host, port: target.port, privateKey: this.ensureKey() });
+			try { return { kind: "host", fingerprint: host.fingerprint, canCreate: false, passwordRequired: true, syncs: (await host.listSyncs()).map(s => ({ id: s.id, name: s.name, locked: s.locked })) }; }
+			finally { host.close(); }
+		} catch (err) { if (!(err instanceof NotAHostError)) throw err; }
+		const endpoint = await SftpEndpoint.connect({ host: target.host, port: target.port, privateKey: this.privateKey() });
+		try {
+			return { kind: "ssh", fingerprint: endpoint.fingerprint, canCreate: true, passwordRequired: false,
+				syncs: [...choiceViews(await endpoint.listSyncs()), ...await this.peerChoices(endpoint.folderStore())] };
 		} finally { endpoint.close(); }
 	}
+	/** Shared-folder syncs: protected ones show details only to their members. */
+	private async peerChoices(store: FolderStore): Promise<SyncChoiceView[]> {
+		const mine = this.state.syncId && isPeerSyncId(this.state.syncId) ? this.state.syncId : null;
+		const keys = mine ? await this.keysFor(mine) : null;
+		return (await listPeerSyncs(store, id => id === mine ? keys : null)).map(s => ({ id: s.id, name: s.name, locked: s.locked,
+			...(s.createdAt ? { createdAt: s.createdAt } : {}), ...(s.createdBy ? { createdBy: s.createdBy } : {}),
+			...(s.devices ? { devices: s.devices.map(d => ({ id: d.id, name: d.name, lastSeen: d.lastSeen })) } : {}) }));
+	}
+	private async keysFor(syncId: string): Promise<SyncKeys | null> {
+		const master = await recallSyncKey(syncId);
+		return master ? keysFromMaster(master) : null;
+	}
+
 	/** The syncs on the configured endpoint (Change sync's chooser). */
 	async listSyncs(): Promise<SyncChoiceView[]> {
-		const endpoint = await this.open();
-		return choiceViews(await endpoint.listSyncs());
-	}
-
-	/** Check a target against what the endpoint holds right now. */
-	private async resolveTarget(endpoint: SftpEndpoint, target: SyncTarget): Promise<{ syncId: string; create: { name: string } | null; name: string }> {
-		const syncs = await endpoint.listSyncs();
-		if (target.kind === "join") {
-			const found = syncs.find(sync => sync.id === target.id);
-			if (!found) throw new Error("That sync is no longer on the endpoint. Check the endpoint again and pick another.");
-			return { syncId: found.id, create: null, name: found.name };
+		const endpoint = this.state.endpoint;
+		if (!endpoint) throw new Error("No endpoint configured");
+		if (endpoint.kind === "ssh") {
+			const sftp = await this.open();
+			return [...choiceViews(await sftp.listSyncs()), ...await this.peerChoices(sftp.folderStore())];
 		}
-		const name = cleanSyncName(target.name);
-		// The endpoint's first sync goes in /sync itself, where devices on
-		// older versions look for it.
-		return { syncId: syncs.some(sync => sync.id === MAIN_SYNC_ID) ? newSyncId() : MAIN_SYNC_ID, create: { name }, name };
+		if (endpoint.kind === "host") {
+			const host = await HostConnection.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.ensureKey(), pinned: endpoint.fingerprint });
+			try { return (await host.listSyncs()).map(s => ({ id: s.id, name: s.name, locked: s.locked })); } finally { host.close(); }
+		}
+		const opened = await this.openStore(endpoint, null);
+		try { return await this.peerChoices(opened.store); } finally { opened.close(); }
 	}
 
-	async connect(options: { host: string; port: number; fingerprint: string; target?: SyncTarget; join?: JoinChoice }): Promise<void> {
-		const sameEndpoint = this.state.endpoint?.host === options.host && this.state.endpoint.port === options.port && this.state.endpoint.fingerprint === options.fingerprint;
-		if (!sameEndpoint || options.target) {
+	/** Check a target against what the endpoint holds right now. Joining a
+	 *  protected sync checks its password; creating a shared-folder sync
+	 *  creates it at once. */
+	private async resolveTarget(endpoint: SyncEndpointView, target: SyncTarget): Promise<{ syncId: string; create: { name: string } | null; name: string; locked: boolean; master: Buffer | null }> {
+		const password = target.password !== undefined && target.password !== "" ? target.password : undefined;
+		if (endpoint.kind === "host") {
+			if (target.kind === "create") throw new Error("New syncs on a host are created on the host PC itself. Create it there, then join it here.");
+			const host = await HostConnection.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.ensureKey(), pinned: endpoint.fingerprint });
+			try {
+				const found = (await host.listSyncs()).find(s => s.id === target.id);
+				if (!found) throw new Error("That sync is no longer on the host. Check the host again and pick another.");
+				if (!found.crypto) throw new Error("This host's sync has no password, which this app does not accept.");
+				if (!password) throw new Error("Type this sync's password to join it.");
+				const keys = await deriveSyncKeys(password, found.crypto);
+				await host.join(found.id, this.state.deviceId, keys.auth); // the host checks the password
+				return { syncId: found.id, create: null, name: found.name, locked: true, master: keys.master };
+			} finally { host.close(); }
+		}
+		if (endpoint.kind === "ssh" && (target.kind === "join" ? !isPeerSyncId(target.id) : !password)) {
+			const probe = await SftpEndpoint.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.privateKey(), pinned: endpoint.fingerprint });
+			try {
+				const syncs = await probe.listSyncs();
+				if (target.kind === "join") {
+					const found = syncs.find(sync => sync.id === target.id);
+					if (!found) throw new Error("That sync is no longer on the endpoint. Check the endpoint again and pick another.");
+					return { syncId: found.id, create: null, name: found.name, locked: false, master: null };
+				}
+				const name = cleanSyncName(target.name);
+				// The endpoint's first sync goes in /sync itself, where devices on
+				// older versions look for it.
+				return { syncId: syncs.some(sync => sync.id === MAIN_SYNC_ID) ? newSyncId() : MAIN_SYNC_ID, create: { name }, name, locked: false, master: null };
+			} finally { probe.close(); }
+		}
+		const opened = await this.openStore(endpoint, null);
+		try {
+			if (target.kind === "join") {
+				if (!isPeerSyncId(target.id)) throw new Error("That sync is no longer there. Check again and pick another.");
+				const meta = await readPeerMeta(opened.store, target.id);
+				if (!meta) throw new Error("That sync is no longer there. Check again and pick another.");
+				let master: Buffer | null = null;
+				if (meta.crypto) {
+					if (!password) throw new Error("Type this sync's password to join it.");
+					master = (await unlockSync(password, meta.id, meta.crypto)).master;
+				}
+				return { syncId: meta.id, create: null, name: await new PeerSyncFolder(opened.store, meta.id, null).currentName(meta), locked: !!meta.crypto, master };
+			}
+			const name = cleanSyncName(target.name);
+			if (endpoint.kind === "self" && !password) throw new Error("New syncs on this device's host need a password.");
+			if (password !== undefined) checkPasswordShape(password);
+			const id = newPeerSyncId();
+			const keys = await createPeerSync(opened.store, { id, name, createdBy: this.state.deviceName, ...(password !== undefined ? { password } : {}) });
+			if (endpoint.kind === "self") await this.refreshHostSyncs();
+			return { syncId: id, create: null, name, locked: !!keys, master: keys?.master ?? null };
+		} finally { opened.close(); }
+	}
+
+	async connect(options: { endpoint: SyncEndpointView; target?: SyncTarget; join?: JoinChoice }): Promise<void> {
+		if (!sameEndpoint(this.state.endpoint, options.endpoint) || options.target) {
 			if (!options.target) throw new Error("Choose a sync to join, or create one");
-			const probe = await SftpEndpoint.connect({ host: options.host, port: options.port, privateKey: this.privateKey(), pinned: options.fingerprint });
-			let resolved: Awaited<ReturnType<DeviceSyncService["resolveTarget"]>>;
-			try { resolved = await this.resolveTarget(probe, options.target); } finally { probe.close(); }
+			const resolved = await this.resolveTarget(options.endpoint, options.target);
 			await this.quiesce();
 			this.base.clear(); this.state.joined = false; this.state.conflicts = [];
-			this.state.syncId = resolved.syncId; this.state.syncName = resolved.name;
+			this.state.syncId = resolved.syncId; this.state.syncName = resolved.name; this.state.syncLocked = resolved.locked;
 			this.pendingCreate = resolved.create;
+			fs.rmSync(PEER_DIR(resolved.syncId), { recursive: true, force: true }); // every join starts fresh
+			if (resolved.master) await rememberSyncKey(resolved.syncId, resolved.master);
 		}
-		this.state.endpoint = { host: options.host, port: options.port, fingerprint: options.fingerprint };
+		this.state.endpoint = options.endpoint;
 		this.pendingJoin = options.join ?? null;
 		this.state.enabled = true;
 		this.save();
-		await this.open();
 		await this.cycleNow();
 		if (this.lastError) throw new Error(this.lastError);
 		this.start();
@@ -247,14 +451,31 @@ class DeviceSyncService {
 		// Finish any cycle first: one still running would re-register this
 		// device in the sync it is leaving, right after the removal below.
 		await this.quiesce();
-		if (this.state.syncId) {
-			try {
-				const current = await this.open();
-				await current.unregisterDevice(this.state.deviceId);
-			} catch { /* offline: the old sync just shows this device as last seen earlier */ }
+		const leaving = this.state.syncId;
+		if (leaving) {
+			try { await this.leaveCurrent(); } catch { /* offline: the old sync just shows this device as last seen earlier */ }
 		}
 		for (const chatId of [...this.heartbeats.keys()]) await this.unlockSession(chatId);
-		await this.connect({ ...endpoint, target, ...(join ? { join } : {}) });
+		await this.connect({ endpoint, target, ...(join ? { join } : {}) });
+		if (leaving && isPeerSyncId(leaving) && leaving !== this.state.syncId) { forgetSyncKey(leaving); fs.rmSync(PEER_DIR(leaving), { recursive: true, force: true }); }
+	}
+	private async leaveCurrent(): Promise<void> {
+		if (!this.isPeer()) {
+			const current = await this.open();
+			await current.unregisterDevice(this.state.deviceId);
+			return;
+		}
+		const handle = await this.openPeer();
+		try {
+			await handle.folder.removeDevice(this.state.deviceId);
+			await handle.folder.removeLocks(this.state.deviceId);
+			await handle.folder.removeSnapshot(this.state.deviceId);
+		} finally { this.closePeer(); }
+		const endpoint = this.state.endpoint;
+		if (endpoint?.kind === "host") {
+			const host = await HostConnection.connect({ host: endpoint.host, port: endpoint.port, privateKey: this.ensureKey(), pinned: endpoint.fingerprint });
+			try { await host.leave(); } finally { host.close(); }
+		}
 	}
 
 	/** Stop syncing and let a cycle already under way finish on its own
@@ -273,8 +494,13 @@ class DeviceSyncService {
 	/** Rename the sync this device is in (any device in it may). */
 	async renameSync(name: string): Promise<void> {
 		const clean = cleanSyncName(name);
-		const endpoint = await this.open();
-		await endpoint.renameSync(clean);
+		if (this.isPeer()) {
+			const handle = await this.openPeer();
+			await handle.folder.rename(this.state.deviceId, clean);
+		} else {
+			const endpoint = await this.open();
+			await endpoint.renameSync(clean);
+		}
 		this.state.syncName = clean;
 		this.save(); this.changed();
 	}
@@ -285,22 +511,26 @@ class DeviceSyncService {
 		this.setPhase("off", null);
 	}
 
-	/** Forget: stop, drop the endpoint AND this device's key (owner: always). */
+	/** Forget: stop, drop the endpoint AND this device's key (owner: always),
+	 *  and every remembered sync password. */
 	forget(): void {
 		this.stop();
 		for (const file of [KEY_FILE(), `${KEY_FILE()}.pub`]) { try { fs.unlinkSync(file); } catch { /* absent */ } }
 		this.base.clear();
-		Object.assign(this.state, { endpoint: null, syncId: null, syncName: null, enabled: false, joined: false, conflicts: [], lastSyncAt: null });
+		forgetSyncKey();
+		fs.rmSync(path.join(SYNC_DIR, "peer"), { recursive: true, force: true });
+		Object.assign(this.state, { endpoint: null, syncId: null, syncName: null, syncLocked: false, enabled: false, joined: false, conflicts: [], lastSyncAt: null });
 		this.pendingCreate = null; this.pendingJoin = null;
 		this.devices = []; this.remoteLocks = [];
 		this.save();
 		this.setPhase("off", null);
 	}
 
+	/** The SSH-layout endpoint (open syncs on SSH endpoints). */
 	private async open(): Promise<SftpEndpoint> {
 		if (this.endpoint) return this.endpoint;
 		const target = this.state.endpoint;
-		if (!target) throw new Error("No endpoint configured");
+		if (!target || target.kind !== "ssh") throw new Error("No endpoint configured");
 		this.setPhase("connecting");
 		try {
 			const endpoint = (await SftpEndpoint.connect({ host: target.host, port: target.port, privateKey: this.privateKey(), pinned: target.fingerprint })).useSync(this.state.syncId ?? MAIN_SYNC_ID);
@@ -315,6 +545,27 @@ class DeviceSyncService {
 			throw err;
 		}
 	}
+	/** The shared-folder sync this device is in. */
+	private async openPeer(): Promise<PeerHandle> {
+		if (this.peer) return this.peer;
+		const target = this.state.endpoint, syncId = this.state.syncId;
+		if (!target || !syncId) throw new Error("No endpoint configured");
+		this.setPhase("connecting");
+		try {
+			const opened = await this.openStore(target, syncId);
+			const handle: PeerHandle = { folder: new PeerSyncFolder(opened.store, syncId, this.state.syncLocked ? await this.keysFor(syncId) : null), close: opened.close };
+			opened.onClose?.(() => { if (this.peer === handle) { this.peer = null; if (this.state.enabled) { this.setPhase("offline"); this.schedule(this.backoff()); } } });
+			this.peer = handle;
+			this.failures = 0;
+			return handle;
+		} catch (err) {
+			if (err instanceof HostKeyMismatchError) { this.setPhase("blocked", err.message); throw err; }
+			this.failures++;
+			this.setPhase("offline", err instanceof Error ? err.message : String(err));
+			throw err;
+		}
+	}
+	private closePeer(): void { const handle = this.peer; this.peer = null; handle?.close(); }
 	private backoff(): number { return BACKOFF_MS[Math.min(this.failures, BACKOFF_MS.length - 1)]!; }
 
 	private start(): void {
@@ -335,6 +586,7 @@ class DeviceSyncService {
 		for (const beat of this.heartbeats.values()) clearInterval(beat);
 		this.heartbeats.clear();
 		this.endpoint?.close(); this.endpoint = null;
+		this.closePeer();
 	}
 	/** Run a cycle after `delayMs` (debounced), then keep the interval going. */
 	private schedule(delayMs: number): void {
@@ -346,7 +598,7 @@ class DeviceSyncService {
 	/** One cycle; concurrent requests coalesce into one follow-up run. */
 	cycleNow(): Promise<void> {
 		if (this.cycling) { this.again = true; return this.cycling; }
-		this.cycling = this.cycle().finally(() => {
+		this.cycling = (this.isPeer() ? this.peerCycle() : this.cycle()).finally(() => {
 			this.cycling = null;
 			if (this.timer) clearTimeout(this.timer);
 			if (this.state.enabled && this.phase !== "blocked") this.timer = setTimeout(() => void this.cycleNow(), this.again ? 0 : this.state.intervalSec * 1000);
@@ -355,6 +607,17 @@ class DeviceSyncService {
 		return this.cycling;
 	}
 
+	/** First sync with an endpoint: a full local backup, and the set-aside choice. */
+	private firstSyncSafety(): void {
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "backups", stamp));
+		if (this.pendingJoin === "set-aside") {
+			const files = snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "set-aside", stamp), { move: true });
+			this.state.setAside.push({ id: stamp, createdAt: new Date().toISOString(), files });
+		}
+	}
+
+	/** One cycle on an SSH-layout sync (unchanged since 2026-11-20). */
 	private async cycle(): Promise<void> {
 		if (!this.state.enabled || !this.state.endpoint) return;
 		let endpoint: SftpEndpoint;
@@ -373,23 +636,20 @@ class DeviceSyncService {
 			if (this.state.joined && !meta) throw new SyncRemovedError();
 			if (!this.state.joined) {
 				// Every first sync with an endpoint starts from a full local backup.
-				const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-				snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "backups", stamp));
 				if (this.pendingCreate) {
 					if (meta) throw new Error("A sync already exists there. Check the endpoint again and pick it, or create another.");
+					const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+					snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "backups", stamp));
 					await endpoint.initialize(this.state.deviceName, this.pendingCreate.name);
 				} else if (!meta) throw new Error("This sync is no longer on the endpoint. Use Change sync to pick another.");
-				else if (this.pendingJoin === "set-aside") {
-					const files = snapshotDataDir(PATHS.data, path.join(SYNC_DIR, "set-aside", stamp), { move: true });
-					this.state.setAside.push({ id: stamp, createdAt: new Date().toISOString(), files });
-				}
+				else this.firstSyncSafety();
 			}
 			const manifest = await endpoint.readManifest();
 			const running = this.runningChatHolds();
 			const result = await runSyncCycle({ local: this.local, remote: endpoint, base: this.base, manifest, toggles: this.state.toggles,
 				deviceName: this.state.deviceName, held: [...this.state.conflicts, ...running] });
 			if (result.manifestChanged) await endpoint.writeManifest(manifest);
-			for (const conflict of result.conflicts) this.state.conflicts.push(await this.describe(conflict, endpoint, manifest));
+			for (const conflict of result.conflicts) this.state.conflicts.push(await this.describe(conflict, rel => manifest.files[rel] ? endpoint.read(rel) : Promise.resolve(null)));
 			await endpoint.registerDevice({ id: this.state.deviceId, name: this.state.deviceName, lastSeen: new Date().toISOString() });
 			this.devices = await endpoint.listDevices();
 			this.remoteLocks = await endpoint.listSessionLocks();
@@ -412,6 +672,74 @@ class DeviceSyncService {
 			this.schedule(this.backoff());
 		} finally {
 			if (locked) await endpoint.releaseCycleLock().catch(() => undefined);
+		}
+	}
+
+	/* ── shared-folder syncs ── */
+	private peerStateFile(syncId: string) { return path.join(PEER_DIR(syncId), "state.json"); }
+	private loadPeerState(syncId: string): PeerState {
+		try {
+			const value = JSON.parse(fs.readFileSync(this.peerStateFile(syncId), "utf8")) as PeerState;
+			if (value?.version === 1 && value.entries && typeof value.entries === "object") return { ...emptyPeerState(), ...value };
+		} catch { /* fresh */ }
+		return emptyPeerState();
+	}
+	private savePeerState(syncId: string, state: PeerState): void {
+		fs.mkdirSync(PEER_DIR(syncId), { recursive: true });
+		writeFileAtomicSync(this.peerStateFile(syncId), JSON.stringify(state), { mode: 0o600 });
+	}
+	private peerCache(syncId: string) { return new FsContentCache(path.join(PEER_DIR(syncId), "cache")); }
+
+	private async peerCycle(): Promise<void> {
+		if (!this.state.enabled || !this.state.endpoint || !this.state.syncId) return;
+		const syncId = this.state.syncId;
+		let handle: PeerHandle;
+		try { handle = await this.openPeer(); } catch { return; }
+		this.setPhase("syncing", null);
+		try {
+			const folder = handle.folder;
+			const meta = await folder.readMeta();
+			if (!meta) {
+				if (this.state.joined) throw new SyncRemovedError();
+				throw new Error("This sync is no longer there. Use Change sync to pick another.");
+			}
+			if (!keysFit(meta, folder.keys)) throw new SyncKeyMissingError();
+			if (!this.state.joined) this.firstSyncSafety();
+			const state = this.loadPeerState(syncId);
+			const cache = this.peerCache(syncId);
+			const paused = new Set(this.runningChatHolds().map(h => h.rel));
+			const waiting = this.state.conflicts.filter((c): c is StoredConflict & { peer: string } => typeof c.peer === "string");
+			const result = await runPeerCycle({ folder, local: this.local, cache, state, deviceId: this.state.deviceId, deviceName: this.state.deviceName,
+				toggles: this.state.toggles, conflicts: waiting as PeerConflict[], paused });
+			if (result.cleared.length) this.state.conflicts = this.state.conflicts.filter(c => !result.cleared.includes(c.id));
+			for (const conflict of result.conflicts) {
+				this.state.conflicts.push({ ...await this.describe(conflict, async rel => (await peerVersion(folder, conflict.peer, rel))?.bytes ?? null), peer: conflict.peer });
+			}
+			if ((this.state.endpoint.kind === "folder" || this.state.endpoint.kind === "ssh") && (!state.gcAt || Date.now() - Date.parse(state.gcAt) > PEER_GC_INTERVAL_MS)) {
+				state.gcAt = new Date().toISOString();
+				await collectPeerGarbage(folder).catch(() => 0); // the host cleans up its own syncs
+			}
+			this.savePeerState(syncId, state);
+			cache.prune(new Set([...Object.values(state.agreed).flatMap(m => Object.values(m)),
+				...Object.entries(state.entries).filter(([rel, e]) => e.h && inSyncScope(rel, this.state.toggles)?.kind !== "file").map(([, e]) => e.h!)]));
+			this.devices = result.devices;
+			this.remoteLocks = (await folder.listLocks()).map(l => ({ chatId: l.chatId, deviceId: l.deviceId, deviceName: l.deviceName, expiresAt: l.expiresAt }));
+			this.state.syncName = await folder.currentName(meta);
+			this.state.joined = true; this.pendingJoin = null;
+			this.state.lastSyncAt = new Date().toISOString();
+			this.save();
+			this.announce([...result.pulled, ...result.deletedLocal]);
+			this.setPhase("in-sync", null);
+		} catch (err) {
+			if (err instanceof HostKeyMismatchError) return;
+			if (err instanceof SyncRemovedError || err instanceof SyncKeyMissingError) {
+				this.state.enabled = false; this.save();
+				this.setPhase("off", err.message);
+				return;
+			}
+			this.closePeer(); this.failures++;
+			this.setPhase("offline", err instanceof Error ? err.message : String(err));
+			this.schedule(this.backoff());
 		}
 	}
 
@@ -441,9 +769,9 @@ class DeviceSyncService {
 		emit("activity-changed", {}); // graph views re-read the mtime revision
 	}
 
-	private async describe(conflict: SyncConflict, endpoint: SftpEndpoint, manifest: Manifest): Promise<StoredConflict> {
+	private async describe(conflict: SyncConflict, remoteRead: (rel: string) => Promise<Buffer | null>): Promise<StoredConflict> {
 		const localBytes = await this.local.read(conflict.rel);
-		const remoteBytes = manifest.files[conflict.rel] ? await endpoint.read(conflict.rel) : null;
+		const remoteBytes = await remoteRead(conflict.rel);
 		if (conflict.recordId) {
 			const l = nodeInfo(localBytes, conflict.recordId), r = nodeInfo(remoteBytes, conflict.recordId);
 			const name = l.name ?? r.name ?? conflict.recordId;
@@ -455,7 +783,7 @@ class DeviceSyncService {
 		}
 		if (conflict.rel.startsWith("cheatsheets/")) {
 			const id = conflict.rel.slice("cheatsheets/".length, -".md".length);
-			const chat = chatInfo((await this.local.read(`chats/${id}.json`)) ?? (manifest.files[`chats/${id}.json`] ? await endpoint.read(`chats/${id}.json`) : null));
+			const chat = chatInfo((await this.local.read(`chats/${id}.json`)) ?? await remoteRead(`chats/${id}.json`));
 			return { ...conflict, kind: "other", label: `Cheat sheet for “${chat.title ?? "a session"}”` };
 		}
 		const names: Record<string, string> = { "settings.json": "Settings", "graph/sources.json": "Imported notes list", "graph/render-settings.json": "Graph display settings", "plugins-state.json": "Enabled plugins" };
@@ -463,28 +791,50 @@ class DeviceSyncService {
 	}
 
 	/* ── conflicts ── */
+	private copyRel(otherDevice: string) {
+		return (bytes: Buffer) => {
+			const chat = JSON.parse(bytes.toString("utf8")) as { id: string; title?: string };
+			const id = `chat_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
+			return { rel: `chats/${id}.json`, bytes: Buffer.from(JSON.stringify({ ...chat, id, title: `${chat.title ?? "Session"} (from ${otherDevice})` }, null, "\t")) };
+		};
+	}
 	async resolve(id: string, decision: ConflictDecision): Promise<void> {
 		const conflict = this.state.conflicts.find(c => c.id === id);
 		if (!conflict) throw new Error("This conflict was already resolved");
 		if (decision === "both" && (conflict.kind !== "session" || conflict.deletedOn)) throw new Error("Only sessions edited on both devices can keep both versions");
-		const endpoint = await this.open();
-		if (!await endpoint.acquireCycleLock(this.state.deviceId)) throw new Error("Another device is syncing right now. Try again in a moment.");
-		try {
-			const manifest = await endpoint.readManifest();
-			const otherDevice = conflict.remoteDevice ?? "another device";
-			await resolveConflict(conflict, decision, { local: this.local, remote: endpoint, base: this.base, manifest, deviceName: this.state.deviceName,
-				copyRel: (bytes) => {
-					const chat = JSON.parse(bytes.toString("utf8")) as { id: string; title?: string };
-					const id = `chat_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
-					return { rel: `chats/${id}.json`, bytes: Buffer.from(JSON.stringify({ ...chat, id, title: `${chat.title ?? "Session"} (from ${otherDevice})` }, null, "\t")) };
-				} });
-			await endpoint.writeManifest(manifest);
-			this.state.conflicts = this.state.conflicts.filter(c => c.id !== id);
-			this.save();
-			this.announce([conflict.rel]);
-			this.changed();
-		} finally { await endpoint.releaseCycleLock().catch(() => undefined); }
+		const otherDevice = conflict.remoteDevice ?? "another device";
+		if (conflict.peer && this.state.syncId) {
+			const syncId = this.state.syncId, peer = conflict.peer;
+			await this.exclusive(async () => {
+				const handle = await this.openPeer();
+				const state = this.loadPeerState(syncId);
+				await resolvePeerConflict({ ...conflict, peer }, decision, { folder: handle.folder, local: this.local, cache: this.peerCache(syncId), state, deviceId: this.state.deviceId, copyRel: this.copyRel(otherDevice) });
+				this.savePeerState(syncId, state);
+			});
+		} else {
+			const endpoint = await this.open();
+			if (!await endpoint.acquireCycleLock(this.state.deviceId)) throw new Error("Another device is syncing right now. Try again in a moment.");
+			try {
+				const manifest = await endpoint.readManifest();
+				await resolveConflict(conflict, decision, { local: this.local, remote: endpoint, base: this.base, manifest, deviceName: this.state.deviceName, copyRel: this.copyRel(otherDevice) });
+				await endpoint.writeManifest(manifest);
+			} finally { await endpoint.releaseCycleLock().catch(() => undefined); }
+		}
+		this.state.conflicts = this.state.conflicts.filter(c => c.id !== id);
+		this.save();
+		this.announce([conflict.rel]);
+		this.changed();
 		this.schedule(0);
+	}
+	/** Run `fn` with no cycle under way or starting meanwhile (a cycle must
+	 *  not save its older state over a resolution). */
+	private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+		while (this.cycling) await this.cycling.catch(() => undefined);
+		const run = fn();
+		const done = run.then(() => undefined, () => undefined);
+		this.cycling = done;
+		try { return await run; }
+		finally { if (this.cycling === done) this.cycling = null; if (this.again) { this.again = false; this.schedule(0); } }
 	}
 
 	/* ── set-aside progress ── */
@@ -515,8 +865,24 @@ class DeviceSyncService {
 	}
 
 	/* ── session locks ── */
+	private async writeLocks(): Promise<void> {
+		if (!this.state.enabled) return;
+		const expiresAt = new Date(Date.now() + LOCK_TTL_MS).toISOString();
+		if (this.isPeer()) {
+			if (!this.peer) return;
+			const chats = [...this.heartbeats.keys()].map(chatId => ({ chatId, expiresAt }));
+			await (chats.length ? this.peer.folder.writeLocks({ deviceId: this.state.deviceId, deviceName: this.state.deviceName, chats }) : this.peer.folder.removeLocks(this.state.deviceId)).catch(() => undefined);
+		}
+	}
 	private async lockSession(chatId: string): Promise<void> {
-		if (!this.endpoint || !this.state.enabled) return;
+		if (!this.state.enabled) return;
+		if (this.isPeer()) {
+			if (!this.peer) return;
+			if (!this.heartbeats.has(chatId)) this.heartbeats.set(chatId, setInterval(() => void this.writeLocks(), LOCK_TTL_MS / 3));
+			await this.writeLocks();
+			return;
+		}
+		if (!this.endpoint) return;
 		const write = () => this.endpoint?.writeSessionLock({ chatId, deviceId: this.state.deviceId, deviceName: this.state.deviceName, expiresAt: new Date(Date.now() + LOCK_TTL_MS).toISOString() }).catch(() => undefined);
 		await write();
 		if (!this.heartbeats.has(chatId)) this.heartbeats.set(chatId, setInterval(() => void write(), LOCK_TTL_MS / 3));
@@ -525,12 +891,13 @@ class DeviceSyncService {
 		const beat = this.heartbeats.get(chatId);
 		if (beat) clearInterval(beat);
 		this.heartbeats.delete(chatId);
+		if (this.isPeer()) { await this.writeLocks(); return; }
 		await this.endpoint?.removeSessionLock(chatId).catch(() => undefined);
 	}
 }
 
 function choiceViews(syncs: SyncSummary[]): SyncChoiceView[] {
-	return syncs.map(sync => ({ id: sync.id, name: sync.name, createdAt: sync.createdAt, createdBy: sync.createdBy,
+	return syncs.map(sync => ({ id: sync.id, name: sync.name, locked: false, createdAt: sync.createdAt, createdBy: sync.createdBy,
 		devices: sync.devices.map(d => ({ id: d.id, name: d.name, lastSeen: d.lastSeen })) }));
 }
 

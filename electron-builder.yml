@@ -84,6 +84,9 @@ files:
   # Main-process ID-token signature verification (no bundled OAuth implementation).
   - node_modules/jose/**/*
 extraResources:
+  # The tray icon while hosting Device Sync (owner, 2026-11-28).
+  - from: build/icon.png
+    to: tray-icon.png
   # Attribution/license for the bounded local Pi cutoff-selector port.
   - from: docs/compaction-accounting.md
     to: licenses/pi-compaction.md

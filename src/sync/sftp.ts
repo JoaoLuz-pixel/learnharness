@@ -25,8 +25,12 @@ import ssh2, { type Client as SshClient, type SFTPWrapper } from "ssh2";
 // ssh2 is CommonJS: named ESM imports of its namespaces are not available.
 const { Client, utils } = ssh2;
 import { emptyManifest, type Manifest, type RemoteSide } from "./engine.ts";
+import type { FolderStore } from "./peer.ts";
 
 export const SYNC_ROOT = "/sync";
+/** Password-protected syncs (owner, 2026-11-28) use the shared-folder
+ *  layout here; app versions from before never look inside it. */
+export const PEER_ROOT = `${SYNC_ROOT}/peer`;
 export const SYNC_USER = "learnharness";
 export const ENDPOINT_FORMAT = 1;
 /** The original sync, in /sync itself. */
@@ -163,6 +167,26 @@ export class SftpEndpoint implements RemoteSide {
 		try { return JSON.parse(raw.toString("utf8")) as T; } catch { return null; }
 	}
 	private writeJson(path: string, value: unknown) { return this.writeRaw(path, Buffer.from(JSON.stringify(value, null, "\t"))); }
+
+	/** The shared-folder layout under /sync/peer (password-protected syncs). */
+	folderStore(): FolderStore {
+		const at = (rel: string) => {
+			if (rel.split("/").some(s => !s || s === "." || s === ".." || !/^[A-Za-z0-9._-]+$/.test(s))) throw new Error(`Unsafe sync path ${rel}`);
+			return `${PEER_ROOT}/${rel}`;
+		};
+		return {
+			read: rel => this.readRaw(at(rel)),
+			write: (rel, bytes) => this.writeRaw(at(rel), bytes),
+			create: async (rel, bytes) => { if (!await this.statPath(at(rel))) await this.writeRaw(at(rel), bytes); },
+			remove: rel => this.removeRaw(at(rel)),
+			list: async dir => (await this.listDir(at(dir))).filter(name => !name.startsWith(".")),
+			age: async rel => { const stat = await this.statPath(at(rel)); return stat ? Date.now() - stat.mtime * 1000 : null; },
+		};
+	}
+	private async statPath(path: string): Promise<{ mtime: number } | null> {
+		try { return await p<{ mtime: number }>(cb => this.sftp.stat(path, cb as never)); }
+		catch (err) { if (noSuchFile(err)) return null; throw err; }
+	}
 
 	// RemoteSide
 	read(rel: string) { return this.readRaw(this.dataPath(rel)); }

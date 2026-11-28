@@ -4,6 +4,7 @@
 
 - [Getting started](getting-started.md) — connections, models, sessions, dictation, files, and notes imports.
 - [Keyboard shortcuts](keyboard.md) — defaults, rebinding, and navigation.
+- [Device Sync](device-sync.md) — share progress across devices through a cloud folder, one of your computers, or an SSH endpoint; sync passwords.
 - [Claude Code](claude-code.md) — use an installed CLI and troubleshoot its connection.
 - [Custom and local models](custom-providers.md) — configure an OpenAI-compatible endpoint.
 - [Context, caching, and costs](compaction-accounting.md) — understand the session meters and advanced cache preferences.

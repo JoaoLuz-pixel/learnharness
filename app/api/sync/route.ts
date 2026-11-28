@@ -1,9 +1,9 @@
 // Device Sync (owner design 2026-11-15): GET the status; POST one action.
 // Loopback-only like every route (the desktop server binds 127.0.0.1).
 import { deviceSync } from "@/src/server";
-import type { ConflictDecision, JoinChoice, SyncTarget } from "@/src/core";
+import type { ConflictDecision, JoinChoice, SyncEndpointTarget, SyncEndpointView, SyncTarget } from "@/src/core";
 
-const HOST = /^[A-Za-z0-9.:\-[\]]{1,255}$/;
+const HOST = /^[A-Za-z0-9.:\-[\]%]{1,255}$/;
 
 function endpointOf(body: Record<string, unknown>): { host: string; port: number } {
 	const host = typeof body.host === "string" ? body.host.trim() : "";
@@ -12,12 +12,34 @@ function endpointOf(body: Record<string, unknown>): { host: string; port: number
 	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("The port must be a number from 1 to 65535");
 	return { host, port };
 }
+function folderOf(value: unknown): string {
+	if (typeof value !== "string" || !value.trim() || value.length > 1024 || /[\u0000-\u001f]/.test(value)) throw new Error("Choose a folder");
+	return value.trim();
+}
 
-/** Join an existing sync (by id) or create one (with a name). */
+/** What Probe looks at (older clients send host/port at the top level). */
+function probeTargetOf(body: Record<string, unknown>): SyncEndpointTarget {
+	const t = (body.target ?? { kind: "address", host: body.host, port: body.port }) as Record<string, unknown>;
+	if (t.kind === "folder") return { kind: "folder", path: folderOf(t.path) };
+	if (t.kind === "self") return { kind: "self" };
+	return { kind: "address", ...endpointOf(t) };
+}
+/** Where Connect goes, as the probe found it. */
+function endpointViewOf(body: Record<string, unknown>): SyncEndpointView {
+	const e = (body.endpoint ?? { kind: "ssh", host: body.host, port: body.port, fingerprint: body.fingerprint }) as Record<string, unknown>;
+	if (e.kind === "folder") return { kind: "folder", path: folderOf(e.path) };
+	if (e.kind === "self") return { kind: "self" };
+	if (e.kind !== "ssh" && e.kind !== "host") throw new Error("Unknown endpoint");
+	if (typeof e.fingerprint !== "string" || !e.fingerprint.startsWith("SHA256:")) throw new Error("Confirm the endpoint's fingerprint first");
+	return { kind: e.kind, ...endpointOf(e), fingerprint: e.fingerprint };
+}
+
+/** Join an existing sync (by id) or create one (with a name), with an optional password. */
 function targetOf(value: unknown): SyncTarget {
-	const t = value as { kind?: unknown; id?: unknown; name?: unknown } | null;
-	if (t?.kind === "join" && typeof t.id === "string" && t.id.length <= 40) return { kind: "join", id: t.id };
-	if (t?.kind === "create" && typeof t.name === "string") return { kind: "create", name: t.name };
+	const t = value as { kind?: unknown; id?: unknown; name?: unknown; password?: unknown } | null;
+	const password = typeof t?.password === "string" && t.password !== "" ? { password: t.password } : {};
+	if (t?.kind === "join" && typeof t.id === "string" && t.id.length <= 40) return { kind: "join", id: t.id, ...password };
+	if (t?.kind === "create" && typeof t.name === "string") return { kind: "create", name: t.name, ...password };
 	throw new Error("Choose a sync to join, or create one");
 }
 const joinOf = (value: unknown): JoinChoice | undefined => value === "merge" || value === "set-aside" ? value : undefined;
@@ -42,14 +64,24 @@ export async function POST(request: Request) {
 				});
 				break;
 			case "probe":
-				return Response.json(await sync.probe(endpointOf(body).host, endpointOf(body).port));
+				return Response.json(await sync.probe(probeTargetOf(body)));
+			case "cloud-folders":
+				return Response.json({ folders: sync.cloudFolders() });
 			case "connect": {
-				const { host, port } = endpointOf(body);
-				if (typeof body.fingerprint !== "string" || !body.fingerprint.startsWith("SHA256:")) throw new Error("Confirm the endpoint's fingerprint first");
 				const join = joinOf(body.join);
-				await sync.connect({ host, port, fingerprint: body.fingerprint, target: targetOf(body.target), ...(join ? { join } : {}) });
+				await sync.connect({ endpoint: endpointViewOf(body), target: targetOf(body.target), ...(join ? { join } : {}) });
 				break;
 			}
+			case "host":
+				await sync.setHosting({
+					...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+					...(body.port !== undefined ? { port: Number(body.port) } : {}),
+				});
+				break;
+			case "host-create-sync":
+				if (typeof body.name !== "string" || typeof body.password !== "string") throw new Error("Give the sync a name and a password");
+				await sync.createHostSync(body.name, body.password);
+				break;
 			case "list-syncs":
 				return Response.json({ syncs: await sync.listSyncs() });
 			case "change-sync": {
@@ -64,7 +96,7 @@ export async function POST(request: Request) {
 			case "reconnect": {
 				const endpoint = sync.status().endpoint;
 				if (!endpoint) throw new Error("No endpoint to reconnect to");
-				await sync.connect(endpoint);
+				await sync.connect({ endpoint });
 				break;
 			}
 			case "disconnect":
@@ -99,7 +131,7 @@ function friendlySyncError(err: unknown): string {
 	const message = err instanceof Error ? err.message : String(err);
 	const level = (err as { level?: string }).level;
 	if (level === "client-authentication" || /All configured authentication methods failed/i.test(message)) return "The endpoint refused this device's key. Run the \"Allow this device\" command on the endpoint, then try again.";
-	if (/ECONNREFUSED/.test(message)) return "Nothing answered on that host and port. Check that the SSH server is running and the port is right.";
+	if (/ECONNREFUSED/.test(message)) return "Nothing answered on that host and port. Check that the SSH server (or the other device's host) is running and the port is right.";
 	if (/ENOTFOUND|EAI_AGAIN/.test(message)) return "That host name could not be found.";
 	if (/ETIMEDOUT|Timed out/i.test(message)) return "The endpoint did not answer in time. Check the address and that it is reachable from this network.";
 	if (/EHOSTUNREACH|ENETUNREACH/.test(message)) return "The endpoint is not reachable from this network.";

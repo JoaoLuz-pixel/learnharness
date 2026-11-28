@@ -24,12 +24,13 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, nativeTheme, session, shell, dialog } = require("electron");
 const { pickAttachmentPath } = require("./attachment-picker.cjs");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
 const { createSubscriptions, loadSubscriptionSDK } = require("./subscriptions.cjs");
 const { attachSubscriptionChild, subscriptionControl } = require("./subscription-ipc.cjs");
+const { attachSyncChild } = require("./sync-ipc.cjs");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
 const { openWebSubscriptionBrowser } = require("./web-subscription-browser.cjs");
 const { randomBytes } = require("node:crypto");
@@ -156,6 +157,44 @@ let subscriptionChild = null;
 let desktopAPISecret = null;
 let reopenWindow = null;
 const trustedAppWindows = new Set();
+let syncChild = null;
+
+/* DEVICE SYNC HOST (owner, 2026-11-28): while "Host sync on this device" is
+ * on, closing the window keeps the app in the tray (Windows/Linux; macOS
+ * already stays in the Dock), so other devices can keep syncing. With
+ * hosting off nothing changes. */
+let hosting = false;
+let tray = null;
+function trayIcon() {
+	const file = app.isPackaged ? path.join(process.resourcesPath, "tray-icon.png") : path.join(__dirname, "..", "build", "icon.png");
+	const image = nativeImage.createFromPath(file);
+	return image.isEmpty() ? image : image.resize({ width: process.platform === "win32" ? 16 : 22, height: process.platform === "win32" ? 16 : 22 });
+}
+function showMainWindow() {
+	const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && trustedAppWindows.has(w));
+	if (!win) { reopenWindow?.(); return; }
+	if (win.isMinimized()) win.restore();
+	win.show(); win.focus();
+}
+function setHosting(on) {
+	hosting = on;
+	if (process.platform === "darwin") return;
+	if (on && !tray) {
+		try {
+			tray = new Tray(trayIcon());
+			tray.setToolTip(`${PRODUCT_NAME} — hosting Device Sync`);
+			tray.setContextMenu(Menu.buildFromTemplate([
+				{ label: `Open ${PRODUCT_NAME}`, click: showMainWindow },
+				{ type: "separator" },
+				{ label: "Quit (stops hosting)", click: () => { hosting = false; app.quit(); } },
+			]));
+			tray.on("click", showMainWindow);
+		} catch (err) { log(`tray unavailable: ${err && err.message}`); }
+	} else if (!on && tray) {
+		tray.destroy(); tray = null;
+		if (BrowserWindow.getAllWindows().length === 0) app.quit(); // the window was already closed
+	}
+}
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -248,6 +287,7 @@ function startServer(port) {
 		serverProcess = child;
 		chatgptChild = attachChatGPTChild(child, chatgpt);
 		subscriptionChild = attachSubscriptionChild(child, subscriptions);
+		syncChild = attachSyncChild(child, { onHosting: setHosting });
 		const fwd = (buf) => buf.toString().trimEnd().split("\n").forEach((l) => l && log(`server: ${l}`));
 		child.stdout.on("data", fwd);
 		child.stderr.on("data", fwd);
@@ -258,6 +298,9 @@ function startServer(port) {
 			chatgptChild = null;
 			subscriptionChild?.dispose();
 			subscriptionChild = null;
+			syncChild?.dispose();
+			syncChild = null;
+			setHosting(false);
 			chatgpt?.close();
 			subscriptions?.close();
 		});
@@ -675,7 +718,8 @@ async function main() {
 		chatgpt?.pause();
 		subscriptions?.pause();
 		// macOS convention: the app stays resident, reactivated from the Dock.
-		if (process.platform !== "darwin") app.quit();
+		// Hosting Device Sync keeps it resident in the tray elsewhere too.
+		if (process.platform !== "darwin" && !(hosting && tray)) app.quit();
 	});
 
 	// The child must not outlive us — cover every quit path.

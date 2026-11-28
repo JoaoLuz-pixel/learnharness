@@ -66,7 +66,8 @@ describe("removing a sync is by hand on the endpoint", () => {
 describe("devices from before several syncs", () => {
 	it("are in the first sync, named “Shared progress”, with nothing to do", () => {
 		const status = deviceSync().status();
-		assert.deepEqual(status.sync, { id: "main", name: MAIN_SYNC_DEFAULT_NAME });
+		assert.deepEqual(status.sync, { id: "main", name: MAIN_SYNC_DEFAULT_NAME, locked: false });
+		assert.deepEqual(status.endpoint, { kind: "ssh", host: "nas", port: 22, fingerprint: "SHA256:x" }, "an endpoint from before 0.7.5 is an SSH endpoint");
 		assert.equal(MAIN_SYNC_DEFAULT_NAME, "Shared progress");
 	});
 });
